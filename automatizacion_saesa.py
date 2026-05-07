@@ -1,6 +1,7 @@
 """
 Automatización SAESA – Autorización diaria de PT's
 Framework: ExtJS (Anachronics DMS)
+Los dropdowns de ExtJS se renderizan en el documento PRINCIPAL, no en el iframe.
 """
 
 import asyncio
@@ -29,22 +30,73 @@ async def screenshot(page, nombre):
     print(f"  📸 {path}")
 
 
+async def click_en_texto_dropdown(page, texto_buscado):
+    """
+    Busca y hace clic en un item de dropdown ExtJS.
+    Los dropdowns de ExtJS se renderizan en el documento PRINCIPAL (page),
+    incluso cuando el trigger está dentro de un iframe.
+    Busca en TODOS los frames disponibles.
+    """
+    for intentos in range(3):
+        # Buscar en todos los frames (incluyendo la página principal)
+        for ctx in [page] + list(page.frames):
+            try:
+                result = await ctx.evaluate(f'''() => {{
+                    const textos = [
+                        '.x-combo-list-item',
+                        '.x-list-item', 
+                        'div.x-combo-list div',
+                        '[class*="combo-list"] div',
+                        '[class*="list-item"]',
+                        '.x-boundlist-item'
+                    ];
+                    for (const sel of textos) {{
+                        const items = Array.from(document.querySelectorAll(sel));
+                        for (const item of items) {{
+                            if (!item.offsetParent) continue;
+                            const t = (item.innerText || item.textContent || '').trim();
+                            if (t === "{texto_buscado}") {{
+                                const r = item.getBoundingClientRect();
+                                item.click();
+                                return {{ok: true, x: r.x, y: r.y, sel}};
+                            }}
+                        }}
+                    }}
+                    // Fallback: cualquier div/li visible con ese texto exacto
+                    const all = Array.from(document.querySelectorAll('div, li, td, span'));
+                    for (const el of all) {{
+                        if (!el.offsetParent) continue;
+                        const t = (el.innerText || '').trim();
+                        if (t === "{texto_buscado}" && el.children.length === 0) {{
+                            const r = el.getBoundingClientRect();
+                            el.click();
+                            return {{ok: true, via: 'fallback_leaf', x: r.x, y: r.y}};
+                        }}
+                    }}
+                    return {{ok: false}};
+                }}''')
+                if result.get('ok'):
+                    print(f"    ✓ '{texto_buscado}' encontrado y clickeado en frame '{getattr(ctx, 'name', 'main')}'")
+                    return True
+            except Exception:
+                continue
+        await asyncio.sleep(0.5)
+    print(f"    ⚠️ '{texto_buscado}' no encontrado en ningún frame tras 3 intentos")
+    return False
+
+
 async def hacer_login(page):
     print("\n[1] LOGIN")
     await page.goto(SAESA_URL, wait_until="domcontentloaded", timeout=60_000)
     await page.wait_for_timeout(3000)
-
     inputs = await page.query_selector_all('input[type="text"], input:not([type]), input[type="password"]')
     for inp in inputs:
         typ = (await inp.get_attribute("type") or "text").lower()
         if typ in ("text", "") and await inp.is_visible():
-            await inp.fill(SAESA_USER)
-            break
+            await inp.fill(SAESA_USER); break
     for inp in inputs:
         if (await inp.get_attribute("type") or "").lower() == "password" and await inp.is_visible():
-            await inp.fill(SAESA_PASS)
-            break
-
+            await inp.fill(SAESA_PASS); break
     await page.click('input[value="Login"], button:has-text("Login"), input[type="submit"]')
     await page.wait_for_load_state("networkidle", timeout=30_000)
     await page.wait_for_timeout(2000)
@@ -67,7 +119,7 @@ async def navegar_a_permisos(page):
         try:
             await f.wait_for_selector('text=Planificación', timeout=5000)
             frame = f
-            print("  → iframe detectado")
+            print(f"  → iframe: '{f.name}' url='{f.url[:60]}'")
             break
         except PlaywrightTimeout:
             continue
@@ -87,252 +139,161 @@ async def aplicar_filtro(page, frame):
     await page.wait_for_timeout(2500)
     await screenshot(page, "04_filtro_abierto")
 
-    # ── El sistema usa ExtJS. Los widgets son inputs con imagen-trigger al lado.
-    # Buscar los triggers por su clase CSS específica de ExtJS ─────────────────
-    info = await frame.evaluate('''() => {
-        const result = {};
+    # ── PASO A: Seleccionar "Zonales" en el combo Áreas ───────────────────────
+    # El arrow trigger de Áreas está en arrow[6] pos=(690,495)
+    # Hacemos clic directamente con mouse en esas coordenadas
+    print("  → Click en flecha combo Áreas (690, 495)")
+    await page.mouse.click(690, 495)
+    await page.wait_for_timeout(2000)
+    await screenshot(page, "04b_dropdown_areas")
 
-        // Áreas: campo con x-form-arrow-trigger (flecha del combo "Zonales")
-        // y x-form-list-trigger (el cuadradito que abre "Editar lista")
-        const arrowTriggers = Array.from(document.querySelectorAll('img.x-form-arrow-trigger'));
-        const listTriggers  = Array.from(document.querySelectorAll('img.x-form-list-trigger'));
-        const allInputs     = Array.from(document.querySelectorAll('input.x-form-text'));
+    # El dropdown ExtJS se renderiza en el documento principal de la página
+    # (no en el iframe). Buscamos "Zonales" en TODOS los contextos.
+    ok_zonales = await click_en_texto_dropdown(page, "Zonales")
+    await page.wait_for_timeout(1000)
+    await screenshot(page, "04c_zonales")
 
-        result.arrowTriggers = arrowTriggers.map(el => {
-            const r = el.getBoundingClientRect();
-            return {x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), visible: r.width > 0};
-        });
-        result.listTriggers = listTriggers.map(el => {
-            const r = el.getBoundingClientRect();
-            return {x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), visible: r.width > 0};
-        });
-        result.textInputs = allInputs.filter(el => el.offsetParent).map(el => {
-            const r = el.getBoundingClientRect();
-            return {x: Math.round(r.x), y: Math.round(r.y), cls: el.className, val: el.value};
-        });
-        return result;
-    }''')
-
-    print(f"  → Arrow triggers: {len(info['arrowTriggers'])}")
-    for i, t in enumerate(info['arrowTriggers']):
-        print(f"    arrow[{i}] pos=({t['x']},{t['y']}) visible={t['visible']}")
-
-    print(f"  → List triggers: {len(info['listTriggers'])}")
-    for i, t in enumerate(info['listTriggers']):
-        print(f"    list[{i}] pos=({t['x']},{t['y']}) visible={t['visible']}")
-
-    print(f"  → Text inputs visibles: {len(info['textInputs'])}")
-    for i, t in enumerate(info['textInputs']):
-        print(f"    input[{i}] pos=({t['x']},{t['y']}) val='{t['val'][:30]}'")
-
-    # ── PASO A: Click en la flecha del combo "Áreas" para abrir dropdown ─────
-    # El combo de Áreas (Zonales/CIREN/etc.) tiene una x-form-arrow-trigger
-    # Según el log anterior, el campo Áreas está en y≈495 y su arrow en x:690,y:495
-    # Buscamos el arrow trigger visible en esa zona (y entre 480-510)
-    areas_arrow = None
-    for t in info['arrowTriggers']:
-        if t['visible'] and 480 <= t['y'] <= 515:
-            areas_arrow = t
-            break
-
-    if not areas_arrow and info['arrowTriggers']:
-        # Fallback: usar el que esté más cerca de y=495
-        visible = [t for t in info['arrowTriggers'] if t['visible']]
-        if visible:
-            areas_arrow = min(visible, key=lambda t: abs(t['y'] - 495))
-
-    if areas_arrow:
-        print(f"  → Click flecha Áreas en ({areas_arrow['x']+5}, {areas_arrow['y']+5})")
-        await page.mouse.click(areas_arrow['x'] + 5, areas_arrow['y'] + 5)
-        await page.wait_for_timeout(1500)
-        await screenshot(page, "04b_dropdown_areas")
-
-        # Buscar y hacer clic en "Zonales" en el dropdown
-        zonales_clicked = await frame.evaluate('''() => {
-            // El dropdown de ExtJS crea una lista flotante con class x-combo-list
-            const items = Array.from(document.querySelectorAll(
-                '.x-combo-list-item, .x-list-item, div[class*="combo"] div'
-            ));
-            for (const item of items) {
-                if ((item.innerText || item.textContent || '').trim() === 'Zonales') {
-                    item.click();
-                    return {ok: true, text: item.innerText};
-                }
-            }
-            // Alternativa: buscar cualquier elemento visible con texto "Zonales"
-            const all = Array.from(document.querySelectorAll('div, li, span'));
-            for (const el of all) {
-                const text = (el.innerText || el.textContent || '').trim();
-                if (text === 'Zonales' && el.offsetParent) {
-                    el.click();
-                    return {ok: true, via: 'fallback', text};
-                }
-            }
-            return {ok: false};
+    if not ok_zonales:
+        # Diagnóstico: qué hay visible en el dropdown ahora
+        debug = await page.evaluate('''() => {
+            const all = Array.from(document.querySelectorAll("div, li"));
+            const visible = all.filter(el => el.offsetParent && el.children.length === 0);
+            return visible.slice(0, 20).map(el => ({
+                tag: el.tagName,
+                cls: el.className.substring(0, 40),
+                text: (el.innerText || '').trim().substring(0, 50)
+            }));
         }''')
-        print(f"  → Zonales clicked: {zonales_clicked}")
+        print(f"  → Elementos leaf visibles en page: {debug[:10]}")
+
+    # ── PASO B: Click en list-trigger para abrir "Editar lista" ──────────────
+    # list-trigger está en pos=(838,495)
+    print("  → Click en list-trigger (838, 495)")
+    await page.mouse.click(838, 495)
+    await page.wait_for_timeout(2000)
+    await screenshot(page, "04d_popup_lista")
+
+    # Verificar si abrió en algún frame
+    popup_frame = None
+    for ctx in [page] + list(page.frames):
+        try:
+            tiene = await ctx.evaluate('''() =>
+                Array.from(document.querySelectorAll("*")).some(
+                    el => el.offsetParent && (el.innerText || "").includes("Editar lista")
+                )
+            ''')
+            if tiene:
+                popup_frame = ctx
+                print(f"  ✓ Popup 'Editar lista' encontrado en frame '{getattr(ctx, 'name', 'main')}'")
+                break
+        except Exception:
+            continue
+
+    if popup_frame:
+        # Desmarcar Todos
+        await popup_frame.evaluate('''() => {
+            const cbs = Array.from(document.querySelectorAll("input[type='checkbox']"));
+            for (const cb of cbs) {
+                if (!cb.offsetParent) continue;
+                const p = cb.closest("div,td,li,label") || cb.parentElement;
+                if (p && p.innerText.includes("Todos") && cb.checked) cb.click();
+            }
+        }''')
+        await page.wait_for_timeout(300)
+
+        # Marcar Metropolitana
+        marcado = await popup_frame.evaluate('''() => {
+            const cbs = Array.from(document.querySelectorAll("input[type='checkbox']"));
+            for (const cb of cbs) {
+                if (!cb.offsetParent) continue;
+                const p = cb.closest("div,td,li,label") || cb.parentElement;
+                if (p && p.innerText.includes("Metropolitana") && !cb.checked) {
+                    cb.click();
+                    return true;
+                }
+            }
+            return false;
+        }''')
+        print(f"  → Metropolitana marcada: {marcado}")
+        await page.wait_for_timeout(300)
+        await screenshot(page, "04e_metropolitana")
+
+        # Clic en Aceptar del popup
+        aceptar = await popup_frame.evaluate('''() => {
+            const btns = Array.from(document.querySelectorAll("button,input[type='button']"));
+            for (const btn of btns) {
+                if (!btn.offsetParent) continue;
+                const t = (btn.innerText || btn.value || "").trim();
+                if (t === "Aceptar") {
+                    const r = btn.getBoundingClientRect();
+                    return {x: Math.round(r.x), y: Math.round(r.y)};
+                }
+            }
+            return null;
+        }''')
+        if aceptar:
+            await page.mouse.click(aceptar['x'] + 20, aceptar['y'] + 5)
+            print("  ✓ Aceptar popup lista")
         await page.wait_for_timeout(1000)
-        await screenshot(page, "04c_zonales_seleccionado")
     else:
-        print("  ⚠️ No se encontró flecha de Áreas")
+        print("  ⚠️ Popup 'Editar lista' no detectado")
 
-    # ── PASO B: Click en x-form-list-trigger para abrir "Editar lista" ────────
-    # Según el log: cls='x-form-trigger x-form-list-trigger' en x:838, y:495
-    list_trigger = None
-    for t in info['listTriggers']:
-        if t['visible']:
-            list_trigger = t
-            break
+    await screenshot(page, "04f_post_lista")
 
-    if list_trigger:
-        print(f"  → Click list-trigger en ({list_trigger['x']+5}, {list_trigger['y']+5})")
-        await page.mouse.click(list_trigger['x'] + 5, list_trigger['y'] + 5)
-        await page.wait_for_timeout(2000)
-        await screenshot(page, "04d_popup_lista")
+    # ── PASO C: Seleccionar Estado = PCCT ─────────────────────────────────────
+    # arrow[7] pos=(838,521) es la flecha del Estado
+    print("  → Click en flecha combo Estado (838, 521)")
+    await page.mouse.click(838, 521)
+    await page.wait_for_timeout(2000)
+    await screenshot(page, "04g_dropdown_estado")
 
-        # Verificar si abrió el popup "Editar lista"
-        popup_abierto = await frame.evaluate('''() => {
-            const els = Array.from(document.querySelectorAll('*'));
-            return els.some(el => (el.innerText || '').includes('Editar lista') && el.offsetParent);
-        }''')
-        print(f"  → Popup 'Editar lista' abierto: {popup_abierto}")
-
-        if popup_abierto:
-            # Desmarcar Todos y marcar Metropolitana
-            resultado = await frame.evaluate('''() => {
-                const cbs = Array.from(document.querySelectorAll("input[type='checkbox']"));
-                let desmarcados = 0, marcados = 0;
-                for (const cb of cbs) {
-                    if (!cb.offsetParent) continue;
-                    const parent = cb.closest('div, td, li, label') || cb.parentElement;
-                    const text = (parent ? parent.innerText : '').trim();
-                    if (text.includes('Todos') && cb.checked) {
-                        cb.click(); desmarcados++;
+    ok_pcct = await click_en_texto_dropdown(page, ESTADO_FILTRO)
+    if not ok_pcct:
+        # Intentar con texto parcial
+        for ctx in [page] + list(page.frames):
+            try:
+                r = await ctx.evaluate('''() => {
+                    const all = Array.from(document.querySelectorAll("div,li,td"));
+                    for (const el of all) {
+                        if (!el.offsetParent) continue;
+                        const t = (el.innerText || "").trim();
+                        if (t.includes("PCCT") && t.includes("Revisión")) {
+                            el.click();
+                            return {ok: true, text: t};
+                        }
                     }
-                }
-                // Re-leer para marcar Metropolitana
-                const cbs2 = Array.from(document.querySelectorAll("input[type='checkbox']"));
-                for (const cb of cbs2) {
-                    if (!cb.offsetParent) continue;
-                    const parent = cb.closest('div, td, li, label') || cb.parentElement;
-                    const text = (parent ? parent.innerText : '').trim();
-                    if (text.includes('Metropolitana') && !cb.checked) {
-                        cb.click(); marcados++;
-                    }
-                }
-                return {desmarcados, marcados, totalCbs: cbs.length};
-            }''')
-            print(f"  → Selección Metropolitana: {resultado}")
-            await page.wait_for_timeout(500)
-            await screenshot(page, "04e_metropolitana")
+                    return {ok: false};
+                }''')
+                if r.get('ok'):
+                    print(f"  ✓ PCCT encontrado: '{r['text']}'")
+                    ok_pcct = True
+                    break
+            except Exception:
+                continue
+    await page.wait_for_timeout(500)
+    await screenshot(page, "04h_estado")
 
-            # Clic en Aceptar del popup
-            aceptar_pos = await frame.evaluate('''() => {
-                const btns = Array.from(document.querySelectorAll("button, input[type='button'], a"));
+    # ── PASO D: Clic en Aplicar ────────────────────────────────────────────────
+    for ctx in [frame, page]:
+        try:
+            aplicar = await ctx.evaluate('''() => {
+                const btns = Array.from(document.querySelectorAll("button,input[type='button'],a,span"));
                 for (const btn of btns) {
                     if (!btn.offsetParent) continue;
-                    const text = (btn.innerText || btn.value || btn.textContent || '').trim();
-                    if (text === 'Aceptar') {
+                    const t = (btn.innerText || btn.value || btn.textContent || "").trim();
+                    if (t === "Aplicar") {
                         const r = btn.getBoundingClientRect();
                         return {x: Math.round(r.x), y: Math.round(r.y)};
                     }
                 }
                 return null;
             }''')
-            if aceptar_pos:
-                await page.mouse.click(aceptar_pos['x'] + 20, aceptar_pos['y'] + 5)
-                print("  ✓ Aceptar popup lista")
-            await page.wait_for_timeout(1000)
-    else:
-        print("  ⚠️ No se encontró list-trigger — usando checkbox cuadrado a la derecha de Áreas")
-        # Fallback: el checkbox cuadrado a la derecha del campo áreas (x≈1035, y≈495 según captura)
-        await page.mouse.click(1035, 495)
-        await page.wait_for_timeout(1500)
-        await screenshot(page, "04d_fallback_checkbox")
-
-    await screenshot(page, "04f_post_lista")
-
-    # ── PASO C: Seleccionar Estado = "Revisión y Autorización PCCT" ───────────
-    # El campo Estado tiene una x-form-arrow-trigger. Según el log: y≈521
-    # Hay múltiples arrow triggers — buscamos el de Estado (y entre 515-535)
-    estado_arrow = None
-    info2 = await frame.evaluate('''() => {
-        const arrowTriggers = Array.from(document.querySelectorAll('img.x-form-arrow-trigger'));
-        return arrowTriggers.filter(el => el.offsetParent).map(el => {
-            const r = el.getBoundingClientRect();
-            return {x: Math.round(r.x), y: Math.round(r.y), visible: r.width > 0};
-        });
-    }''')
-
-    for t in info2:
-        if t['visible'] and 510 <= t['y'] <= 540:
-            estado_arrow = t
-            break
-
-    if not estado_arrow and info2:
-        # Usar el segundo arrow trigger visible (el primero es Áreas, el segundo es Estado)
-        visible = [t for t in info2 if t['visible']]
-        if len(visible) >= 2:
-            estado_arrow = visible[1]
-        elif visible:
-            estado_arrow = visible[0]
-
-    if estado_arrow:
-        print(f"  → Click flecha Estado en ({estado_arrow['x']+5}, {estado_arrow['y']+5})")
-        await page.mouse.click(estado_arrow['x'] + 5, estado_arrow['y'] + 5)
-        await page.wait_for_timeout(1500)
-        await screenshot(page, "04g_dropdown_estado")
-
-        # Hacer clic en "Revisión y Autorización PCCT" del dropdown
-        pcct_clicked = await frame.evaluate('''() => {
-            const items = Array.from(document.querySelectorAll(
-                ".x-combo-list-item, .x-list-item, div[class*='combo'] div, div[class*='list'] div"
-            ));
-            for (const item of items) {
-                if (!item.offsetParent) continue;
-                const text = (item.innerText || item.textContent || '').trim();
-                if (text.includes('PCCT') && text.includes('Revisión')) {
-                    item.click();
-                    return {ok: true, text};
-                }
-            }
-            // Fallback más amplio
-            const all = Array.from(document.querySelectorAll('div, li, td'));
-            for (const el of all) {
-                if (!el.offsetParent) continue;
-                const text = (el.innerText || '').trim();
-                if (text.includes('PCCT') && text.includes('Revisión') && text.length < 60) {
-                    el.click();
-                    return {ok: true, via: 'fallback', text};
-                }
-            }
-            return {ok: false};
-        }''')
-        print(f"  → PCCT clicked: {pcct_clicked}")
-        await page.wait_for_timeout(500)
-        await screenshot(page, "04h_estado_seleccionado")
-    else:
-        print("  ⚠️ No se encontró flecha de Estado")
-
-    # ── PASO D: Clic en "Aplicar" ─────────────────────────────────────────────
-    aplicar_pos = await frame.evaluate('''() => {
-        const btns = Array.from(document.querySelectorAll("button, input[type='button'], a, span"));
-        for (const btn of btns) {
-            if (!btn.offsetParent) continue;
-            const text = (btn.innerText || btn.value || btn.textContent || '').trim();
-            if (text === 'Aplicar') {
-                const r = btn.getBoundingClientRect();
-                return {x: Math.round(r.x), y: Math.round(r.y)};
-            }
-        }
-        return null;
-    }''')
-
-    if aplicar_pos:
-        await page.mouse.click(aplicar_pos['x'] + 20, aplicar_pos['y'] + 5)
-        print("  ✓ Aplicar")
-    else:
-        await frame.click('text=Aplicar')
+            if aplicar:
+                await page.mouse.click(aplicar['x'] + 20, aplicar['y'] + 5)
+                print("  ✓ Aplicar")
+                break
+        except Exception:
+            continue
 
     await page.wait_for_load_state("networkidle", timeout=30_000)
     await page.wait_for_timeout(3000)
@@ -360,28 +321,29 @@ async def aprobar_pts(page, frame):
             print(f"  → PT {id_pt} (iter {iteracion})")
             await frame.click('table tbody tr:first-child')
             await page.wait_for_timeout(800)
-
-            # Clic en botón Aprobar de la toolbar
             await frame.click('a:has-text("Aprobar"), button:has-text("Aprobar")')
             await page.wait_for_timeout(1500)
 
-            # Clic en Aceptar del popup via coordenadas JS
-            aceptar = await frame.evaluate('''() => {
-                const btns = Array.from(document.querySelectorAll("button, input[type='button']"));
-                for (const btn of btns) {
-                    if (!btn.offsetParent) continue;
-                    const text = (btn.innerText || btn.value || '').trim();
-                    if (text === 'Aceptar') {
-                        const r = btn.getBoundingClientRect();
-                        return {x: Math.round(r.x), y: Math.round(r.y)};
-                    }
-                }
-                return null;
-            }''')
-            if aceptar:
-                await page.mouse.click(aceptar['x'] + 20, aceptar['y'] + 5)
-            else:
-                await frame.click('button:has-text("Aceptar")')
+            # Aceptar popup (buscar en todos los frames)
+            for ctx in [page] + list(page.frames):
+                try:
+                    aceptar = await ctx.evaluate('''() => {
+                        const btns = Array.from(document.querySelectorAll("button,input[type='button']"));
+                        for (const btn of btns) {
+                            if (!btn.offsetParent) continue;
+                            const t = (btn.innerText || btn.value || "").trim();
+                            if (t === "Aceptar") {
+                                const r = btn.getBoundingClientRect();
+                                return {x: Math.round(r.x), y: Math.round(r.y)};
+                            }
+                        }
+                        return null;
+                    }''')
+                    if aceptar:
+                        await page.mouse.click(aceptar['x'] + 20, aceptar['y'] + 5)
+                        break
+                except Exception:
+                    continue
 
             await page.wait_for_load_state("networkidle", timeout=15_000)
             await page.wait_for_timeout(2000)
