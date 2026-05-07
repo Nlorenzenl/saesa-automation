@@ -1,7 +1,6 @@
 """
 Automatización SAESA – Autorización diaria de PT's
-Framework: ExtJS (Anachronics DMS)
-Los dropdowns de ExtJS se renderizan en el documento PRINCIPAL, no en el iframe.
+Solución: usar la API de ExtJS directamente via JS para manipular los combos
 """
 
 import asyncio
@@ -30,59 +29,19 @@ async def screenshot(page, nombre):
     print(f"  📸 {path}")
 
 
-async def click_en_texto_dropdown(page, texto_buscado):
-    """
-    Busca y hace clic en un item de dropdown ExtJS.
-    Los dropdowns de ExtJS se renderizan en el documento PRINCIPAL (page),
-    incluso cuando el trigger está dentro de un iframe.
-    Busca en TODOS los frames disponibles.
-    """
-    for intentos in range(3):
-        # Buscar en todos los frames (incluyendo la página principal)
-        for ctx in [page] + list(page.frames):
-            try:
-                result = await ctx.evaluate(f'''() => {{
-                    const textos = [
-                        '.x-combo-list-item',
-                        '.x-list-item', 
-                        'div.x-combo-list div',
-                        '[class*="combo-list"] div',
-                        '[class*="list-item"]',
-                        '.x-boundlist-item'
-                    ];
-                    for (const sel of textos) {{
-                        const items = Array.from(document.querySelectorAll(sel));
-                        for (const item of items) {{
-                            if (!item.offsetParent) continue;
-                            const t = (item.innerText || item.textContent || '').trim();
-                            if (t === "{texto_buscado}") {{
-                                const r = item.getBoundingClientRect();
-                                item.click();
-                                return {{ok: true, x: r.x, y: r.y, sel}};
-                            }}
-                        }}
-                    }}
-                    // Fallback: cualquier div/li visible con ese texto exacto
-                    const all = Array.from(document.querySelectorAll('div, li, td, span'));
-                    for (const el of all) {{
-                        if (!el.offsetParent) continue;
-                        const t = (el.innerText || '').trim();
-                        if (t === "{texto_buscado}" && el.children.length === 0) {{
-                            const r = el.getBoundingClientRect();
-                            el.click();
-                            return {{ok: true, via: 'fallback_leaf', x: r.x, y: r.y}};
-                        }}
-                    }}
-                    return {{ok: false}};
-                }}''')
-                if result.get('ok'):
-                    print(f"    ✓ '{texto_buscado}' encontrado y clickeado en frame '{getattr(ctx, 'name', 'main')}'")
-                    return True
-            except Exception:
-                continue
-        await asyncio.sleep(0.5)
-    print(f"    ⚠️ '{texto_buscado}' no encontrado en ningún frame tras 3 intentos")
-    return False
+async def get_content_frame(page):
+    """Obtiene el iframe 'content' donde vive el DMS."""
+    for f in page.frames:
+        if f.name == 'content':
+            return f
+    # Fallback: cualquier frame con Planificación
+    for f in page.frames:
+        try:
+            await f.wait_for_selector('text=Planificación', timeout=2000)
+            return f
+        except Exception:
+            continue
+    return page
 
 
 async def hacer_login(page):
@@ -101,7 +60,6 @@ async def hacer_login(page):
     await page.wait_for_load_state("networkidle", timeout=30_000)
     await page.wait_for_timeout(2000)
     print("  ✓ Login OK")
-    await screenshot(page, "01_login_ok")
 
 
 async def navegar_a_permisos(page):
@@ -114,15 +72,8 @@ async def navegar_a_permisos(page):
     await page.wait_for_load_state("networkidle", timeout=30_000)
     await page.wait_for_timeout(2000)
 
-    frame = page
-    for f in page.frames:
-        try:
-            await f.wait_for_selector('text=Planificación', timeout=5000)
-            frame = f
-            print(f"  → iframe: '{f.name}' url='{f.url[:60]}'")
-            break
-        except PlaywrightTimeout:
-            continue
+    frame = await get_content_frame(page)
+    print(f"  → frame: '{frame.name}'")
 
     await frame.click('text=Planificación')
     await page.wait_for_timeout(1000)
@@ -134,166 +85,218 @@ async def navegar_a_permisos(page):
 
 
 async def aplicar_filtro(page, frame):
-    print("\n[3] FILTRO (ExtJS)")
+    print("\n[3] FILTRO")
     await frame.click('text=Filtro')
     await page.wait_for_timeout(2500)
     await screenshot(page, "04_filtro_abierto")
 
-    # ── PASO A: Seleccionar "Zonales" en el combo Áreas ───────────────────────
-    # El arrow trigger de Áreas está en arrow[6] pos=(690,495)
-    # Hacemos clic directamente con mouse en esas coordenadas
-    print("  → Click en flecha combo Áreas (690, 495)")
-    await page.mouse.click(690, 495)
-    await page.wait_for_timeout(2000)
-    await screenshot(page, "04b_dropdown_areas")
+    # ── Usar API ExtJS directamente para manipular los componentes ─────────────
+    # ExtJS guarda todos los componentes en Ext.ComponentMgr (o Ext.getCmp)
+    # Podemos iterar todos los componentes y encontrar los combos por su store/value
 
-    # El dropdown ExtJS se renderiza en el documento principal de la página
-    # (no en el iframe). Buscamos "Zonales" en TODOS los contextos.
-    ok_zonales = await click_en_texto_dropdown(page, "Zonales")
-    await page.wait_for_timeout(1000)
-    await screenshot(page, "04c_zonales")
+    resultado = await frame.evaluate('''() => {
+        const log = [];
+        try {
+            // Obtener todos los componentes ExtJS registrados
+            const cm = Ext.ComponentMgr || Ext.ComponentManager;
+            if (!cm) return {error: "No Ext.ComponentMgr"};
 
-    if not ok_zonales:
-        # Diagnóstico: qué hay visible en el dropdown ahora
-        debug = await page.evaluate('''() => {
-            const all = Array.from(document.querySelectorAll("div, li"));
-            const visible = all.filter(el => el.offsetParent && el.children.length === 0);
-            return visible.slice(0, 20).map(el => ({
-                tag: el.tagName,
-                cls: el.className.substring(0, 40),
-                text: (el.innerText || '').trim().substring(0, 50)
-            }));
-        }''')
-        print(f"  → Elementos leaf visibles en page: {debug[:10]}")
+            const all = [];
+            cm.each ? cm.each(c => all.push(c)) : Object.values(cm.map || {}).forEach(c => all.push(c));
 
-    # ── PASO B: Click en list-trigger para abrir "Editar lista" ──────────────
-    # list-trigger está en pos=(838,495)
-    print("  → Click en list-trigger (838, 495)")
-    await page.mouse.click(838, 495)
-    await page.wait_for_timeout(2000)
-    await screenshot(page, "04d_popup_lista")
+            log.push("Total componentes: " + all.length);
 
-    # Verificar si abrió en algún frame
-    popup_frame = None
-    for ctx in [page] + list(page.frames):
-        try:
-            tiene = await ctx.evaluate('''() =>
-                Array.from(document.querySelectorAll("*")).some(
-                    el => el.offsetParent && (el.innerText || "").includes("Editar lista")
-                )
-            ''')
-            if tiene:
-                popup_frame = ctx
-                print(f"  ✓ Popup 'Editar lista' encontrado en frame '{getattr(ctx, 'name', 'main')}'")
-                break
-        except Exception:
-            continue
+            // Buscar combos (ComboBox)
+            const combos = all.filter(c => c.isXType && c.isXType("combo"));
+            log.push("Combos: " + combos.length);
 
-    if popup_frame:
-        # Desmarcar Todos
-        await popup_frame.evaluate('''() => {
-            const cbs = Array.from(document.querySelectorAll("input[type='checkbox']"));
-            for (const cb of cbs) {
-                if (!cb.offsetParent) continue;
-                const p = cb.closest("div,td,li,label") || cb.parentElement;
-                if (p && p.innerText.includes("Todos") && cb.checked) cb.click();
+            const results = [];
+            combos.forEach((c, i) => {
+                try {
+                    const store = c.store;
+                    let storeData = [];
+                    if (store && store.data) {
+                        store.data.each ? store.data.each(r => storeData.push(r.data)) : null;
+                    }
+                    results.push({
+                        i, id: c.id,
+                        value: c.getValue ? c.getValue() : null,
+                        rawValue: c.getRawValue ? c.getRawValue() : null,
+                        storeData: storeData.slice(0,5),
+                        hidden: c.hidden
+                    });
+                } catch(e) { results.push({i, error: e.message}); }
+            });
+            return {log, combos: results};
+        } catch(e) {
+            return {error: e.message, log};
+        }
+    }''')
+    print(f"  → ExtJS API: {resultado}")
+    await page.wait_for_timeout(500)
+
+    # ── Estrategia directa: usar setValue() de ExtJS en los combos ────────────
+    set_result = await frame.evaluate('''() => {
+        const log = [];
+        try {
+            const cm = Ext.ComponentMgr || Ext.ComponentManager;
+            const all = [];
+            cm.each ? cm.each(c => all.push(c)) : Object.values(cm.map || {}).forEach(c => all.push(c));
+
+            // Encontrar el combo de Áreas (tiene opciones como CIREN, Zonales, etc.)
+            let areasCombo = null;
+            let estadoCombo = null;
+
+            all.forEach(c => {
+                if (!c.isXType || !c.isXType("combo") || c.hidden) return;
+                try {
+                    const store = c.store;
+                    if (!store) return;
+                    let hasZonales = false, hasPCCT = false;
+                    if (store.data && store.data.each) {
+                        store.data.each(r => {
+                            const v = JSON.stringify(r.data || {});
+                            if (v.includes("Zonales")) hasZonales = true;
+                            if (v.includes("PCCT")) hasPCCT = true;
+                        });
+                    }
+                    if (hasZonales) areasCombo = c;
+                    if (hasPCCT) estadoCombo = c;
+                } catch(e) {}
+            });
+
+            if (areasCombo) {
+                log.push("areasCombo encontrado: " + areasCombo.id);
+                // Buscar el record de "Zonales"
+                let zonalesRecord = null;
+                areasCombo.store.data.each(r => {
+                    if (JSON.stringify(r.data).includes("Zonales")) zonalesRecord = r;
+                });
+                if (zonalesRecord) {
+                    areasCombo.setValue(zonalesRecord.get(areasCombo.valueField || "id"));
+                    areasCombo.fireEvent("select", areasCombo, zonalesRecord, 0);
+                    log.push("Zonales seleccionado: " + JSON.stringify(zonalesRecord.data));
+                } else {
+                    log.push("Record Zonales no encontrado");
+                }
+            } else {
+                log.push("areasCombo NO encontrado");
             }
-        }''')
-        await page.wait_for_timeout(300)
 
-        # Marcar Metropolitana
-        marcado = await popup_frame.evaluate('''() => {
+            if (estadoCombo) {
+                log.push("estadoCombo encontrado: " + estadoCombo.id);
+                let pcctRecord = null;
+                estadoCombo.store.data.each(r => {
+                    if (JSON.stringify(r.data).includes("PCCT")) pcctRecord = r;
+                });
+                if (pcctRecord) {
+                    estadoCombo.setValue(pcctRecord.get(estadoCombo.valueField || "id"));
+                    estadoCombo.fireEvent("select", estadoCombo, pcctRecord, 0);
+                    log.push("PCCT seleccionado: " + JSON.stringify(pcctRecord.data).substring(0, 100));
+                }
+            } else {
+                log.push("estadoCombo NO encontrado");
+            }
+
+            return {log};
+        } catch(e) {
+            return {error: e.message, log};
+        }
+    }''')
+    print(f"  → setValue ExtJS: {set_result}")
+    await page.wait_for_timeout(1500)
+    await screenshot(page, "04b_post_extjs_set")
+
+    # ── Después de seleccionar Zonales, hacer clic en list-trigger ────────────
+    # El list-trigger abre el popup "Editar lista" para elegir áreas específicas
+    # Coordenadas dentro del iframe content: (838, 495)
+    # Usar frame.click con selector CSS específico
+    list_trigger_clicked = await frame.evaluate('''() => {
+        const lt = document.querySelector("img.x-form-list-trigger");
+        if (lt && lt.offsetParent) {
+            lt.click();
+            return {ok: true};
+        }
+        return {ok: false};
+    }''')
+    print(f"  → list-trigger click: {list_trigger_clicked}")
+    await page.wait_for_timeout(2000)
+    await screenshot(page, "04c_popup_lista")
+
+    # Verificar popup en frame content
+    popup_ok = await frame.evaluate('''() =>
+        Array.from(document.querySelectorAll("*")).some(
+            el => el.offsetParent && (el.innerText || "").trim() === "Editar lista"
+        )
+    ''')
+    print(f"  → Popup 'Editar lista' en frame content: {popup_ok}")
+
+    if popup_ok:
+        # Desmarcar Todos, marcar Metropolitana
+        r = await frame.evaluate('''() => {
             const cbs = Array.from(document.querySelectorAll("input[type='checkbox']"));
+            let desmarcados = 0, marcados = 0;
+            // Desmarcar Todos
             for (const cb of cbs) {
                 if (!cb.offsetParent) continue;
-                const p = cb.closest("div,td,li,label") || cb.parentElement;
-                if (p && p.innerText.includes("Metropolitana") && !cb.checked) {
-                    cb.click();
-                    return true;
+                const p = cb.closest("div,td,li,tr") || cb.parentElement;
+                if (p && p.innerText.trim() === "Todos" && cb.checked) { cb.click(); desmarcados++; }
+            }
+            // Marcar Metropolitana
+            for (const cb of document.querySelectorAll("input[type='checkbox']")) {
+                if (!cb.offsetParent) continue;
+                const p = cb.closest("div,td,li,tr") || cb.parentElement;
+                if (p && p.innerText.includes("Metropolitana") && !cb.checked) { cb.click(); marcados++; }
+            }
+            return {desmarcados, marcados};
+        }''')
+        print(f"  → Selección Metropolitana: {r}")
+        await page.wait_for_timeout(300)
+        await screenshot(page, "04d_metropolitana")
+
+        # Aceptar
+        aceptar = await frame.evaluate('''() => {
+            for (const btn of document.querySelectorAll("button,input[type='button']")) {
+                if (!btn.offsetParent) continue;
+                if ((btn.innerText || btn.value || "").trim() === "Aceptar") {
+                    btn.click(); return true;
                 }
             }
             return false;
         }''')
-        print(f"  → Metropolitana marcada: {marcado}")
-        await page.wait_for_timeout(300)
-        await screenshot(page, "04e_metropolitana")
-
-        # Clic en Aceptar del popup
-        aceptar = await popup_frame.evaluate('''() => {
-            const btns = Array.from(document.querySelectorAll("button,input[type='button']"));
-            for (const btn of btns) {
-                if (!btn.offsetParent) continue;
-                const t = (btn.innerText || btn.value || "").trim();
-                if (t === "Aceptar") {
-                    const r = btn.getBoundingClientRect();
-                    return {x: Math.round(r.x), y: Math.round(r.y)};
-                }
-            }
-            return null;
-        }''')
-        if aceptar:
-            await page.mouse.click(aceptar['x'] + 20, aceptar['y'] + 5)
-            print("  ✓ Aceptar popup lista")
+        print(f"  → Aceptar popup: {aceptar}")
         await page.wait_for_timeout(1000)
-    else:
-        print("  ⚠️ Popup 'Editar lista' no detectado")
 
-    await screenshot(page, "04f_post_lista")
+    await screenshot(page, "04e_post_lista")
 
-    # ── PASO C: Seleccionar Estado = PCCT ─────────────────────────────────────
-    # arrow[7] pos=(838,521) es la flecha del Estado
-    print("  → Click en flecha combo Estado (838, 521)")
-    await page.mouse.click(838, 521)
-    await page.wait_for_timeout(2000)
-    await screenshot(page, "04g_dropdown_estado")
+    # ── Seleccionar Estado PCCT si el ExtJS set no funcionó ───────────────────
+    # (Ya lo intentamos via ExtJS arriba, pero como fallback hacemos clic manual)
+    estado_check = await frame.evaluate('''() => {
+        // Verificar si ya hay valor en el campo Estado
+        const triggers = Array.from(document.querySelectorAll("img.x-form-arrow-trigger"));
+        const estadoTrigger = triggers.find(t => {
+            const r = t.getBoundingClientRect();
+            return r.y > 515 && r.y < 535 && r.x > 830;
+        });
+        if (estadoTrigger) {
+            const input = estadoTrigger.previousElementSibling;
+            return {val: input ? input.value : "no input", found: true};
+        }
+        return {found: false};
+    }''')
+    print(f"  → Estado actual: {estado_check}")
 
-    ok_pcct = await click_en_texto_dropdown(page, ESTADO_FILTRO)
-    if not ok_pcct:
-        # Intentar con texto parcial
-        for ctx in [page] + list(page.frames):
-            try:
-                r = await ctx.evaluate('''() => {
-                    const all = Array.from(document.querySelectorAll("div,li,td"));
-                    for (const el of all) {
-                        if (!el.offsetParent) continue;
-                        const t = (el.innerText || "").trim();
-                        if (t.includes("PCCT") && t.includes("Revisión")) {
-                            el.click();
-                            return {ok: true, text: t};
-                        }
-                    }
-                    return {ok: false};
-                }''')
-                if r.get('ok'):
-                    print(f"  ✓ PCCT encontrado: '{r['text']}'")
-                    ok_pcct = True
-                    break
-            except Exception:
-                continue
-    await page.wait_for_timeout(500)
-    await screenshot(page, "04h_estado")
-
-    # ── PASO D: Clic en Aplicar ────────────────────────────────────────────────
-    for ctx in [frame, page]:
-        try:
-            aplicar = await ctx.evaluate('''() => {
-                const btns = Array.from(document.querySelectorAll("button,input[type='button'],a,span"));
-                for (const btn of btns) {
-                    if (!btn.offsetParent) continue;
-                    const t = (btn.innerText || btn.value || btn.textContent || "").trim();
-                    if (t === "Aplicar") {
-                        const r = btn.getBoundingClientRect();
-                        return {x: Math.round(r.x), y: Math.round(r.y)};
-                    }
-                }
-                return null;
-            }''')
-            if aplicar:
-                await page.mouse.click(aplicar['x'] + 20, aplicar['y'] + 5)
-                print("  ✓ Aplicar")
-                break
-        except Exception:
-            continue
+    # Clic en Aplicar
+    aplicar_ok = await frame.evaluate('''() => {
+        const btns = Array.from(document.querySelectorAll("button,input[type='button'],a,span"));
+        for (const btn of btns) {
+            if (!btn.offsetParent) continue;
+            const t = (btn.innerText || btn.value || btn.textContent || "").trim();
+            if (t === "Aplicar") { btn.click(); return true; }
+        }
+        return false;
+    }''')
+    print(f"  → Aplicar: {aplicar_ok}")
 
     await page.wait_for_load_state("networkidle", timeout=30_000)
     await page.wait_for_timeout(3000)
@@ -324,26 +327,22 @@ async def aprobar_pts(page, frame):
             await frame.click('a:has-text("Aprobar"), button:has-text("Aprobar")')
             await page.wait_for_timeout(1500)
 
-            # Aceptar popup (buscar en todos los frames)
-            for ctx in [page] + list(page.frames):
-                try:
-                    aceptar = await ctx.evaluate('''() => {
-                        const btns = Array.from(document.querySelectorAll("button,input[type='button']"));
-                        for (const btn of btns) {
-                            if (!btn.offsetParent) continue;
-                            const t = (btn.innerText || btn.value || "").trim();
-                            if (t === "Aceptar") {
-                                const r = btn.getBoundingClientRect();
-                                return {x: Math.round(r.x), y: Math.round(r.y)};
-                            }
-                        }
-                        return null;
-                    }''')
-                    if aceptar:
-                        await page.mouse.click(aceptar['x'] + 20, aceptar['y'] + 5)
-                        break
-                except Exception:
-                    continue
+            # Aceptar popup en frame content
+            aceptar = await frame.evaluate('''() => {
+                for (const btn of document.querySelectorAll("button,input[type='button']")) {
+                    if (!btn.offsetParent) continue;
+                    if ((btn.innerText || btn.value || "").trim() === "Aceptar") { btn.click(); return true; }
+                }
+                return false;
+            }''')
+            if not aceptar:
+                # Fallback en page
+                await page.evaluate('''() => {
+                    for (const btn of document.querySelectorAll("button,input[type='button']")) {
+                        if (!btn.offsetParent) continue;
+                        if ((btn.innerText || btn.value || "").trim() === "Aceptar") { btn.click(); return; }
+                    }
+                }''')
 
             await page.wait_for_load_state("networkidle", timeout=15_000)
             await page.wait_for_timeout(2000)
