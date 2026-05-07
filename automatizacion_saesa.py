@@ -32,27 +32,16 @@ async def hacer_login(page):
     print("\n[1] LOGIN")
     await page.goto(SAESA_URL, wait_until="domcontentloaded", timeout=60_000)
     await page.wait_for_timeout(3000)
-    await screenshot(page, "00_pagina_cargada")
 
     inputs = await page.query_selector_all('input[type="text"], input:not([type]), input[type="password"]')
-    print(f"  → Inputs: {len(inputs)}")
-    for i, inp in enumerate(inputs):
-        name = await inp.get_attribute("name") or ""
-        id_  = await inp.get_attribute("id") or ""
-        typ  = await inp.get_attribute("type") or "text"
-        print(f"    [{i}] name='{name}' id='{id_}' type='{typ}'")
-
     for inp in inputs:
         typ = (await inp.get_attribute("type") or "text").lower()
         if typ in ("text", "") and await inp.is_visible():
             await inp.fill(SAESA_USER)
-            print("  ✓ Usuario")
             break
-
     for inp in inputs:
         if (await inp.get_attribute("type") or "").lower() == "password" and await inp.is_visible():
             await inp.fill(SAESA_PASS)
-            print("  ✓ Contraseña")
             break
 
     await page.click('input[value="Login"], button:has-text("Login"), input[type="submit"]')
@@ -71,7 +60,6 @@ async def navegar_a_permisos(page):
     await page.click('a:has-text("DMS")')
     await page.wait_for_load_state("networkidle", timeout=30_000)
     await page.wait_for_timeout(2000)
-    await screenshot(page, "02_dms")
 
     frame = page
     for f in page.frames:
@@ -99,121 +87,201 @@ async def aplicar_filtro(page, frame):
     await page.wait_for_timeout(2500)
     await screenshot(page, "04_filtro_abierto")
 
-    # Diagnóstico de selects
-    selects = await frame.query_selector_all('select')
-    print(f"  → Selects: {len(selects)}")
-    for i, sel in enumerate(selects):
-        opts = await sel.evaluate('el => Array.from(el.options).map(o => o.text)')
-        print(f"    select[{i}]: {opts[:6]}")
+    # ── Diagnóstico completo del DOM del popup ────────────────────────────────
+    # El popup usa widgets custom (divs/tables), no <select> estándar
+    # Vamos a inspeccionar todo el contenido del popup
+    popup_html = await frame.evaluate('''() => {
+        // Buscar el popup del filtro por su título
+        const titles = Array.from(document.querySelectorAll('*')).filter(
+            el => el.innerText && el.innerText.trim() === 'Filtros'
+        );
+        if (titles.length > 0) {
+            const popup = titles[0].closest('div, table, form') || titles[0].parentElement;
+            return popup ? popup.outerHTML.substring(0, 3000) : 'no popup encontrado';
+        }
+        return 'titulo Filtros no encontrado';
+    }''')
+    print(f"  → HTML popup (primeros 3000 chars):\n{popup_html[:2000]}")
 
-    # Seleccionar Zonales
-    for sel in selects:
-        opts = await sel.evaluate('el => Array.from(el.options).map(o => o.text)')
-        if any('Zonales' in o or 'CIREN' in o for o in opts):
-            await sel.select_option(label='Zonales')
-            print("  ✓ Áreas → Zonales")
-            await page.wait_for_timeout(1000)
-            break
+    # ── Buscar todos los elementos interactivos dentro del popup ─────────────
+    elementos = await frame.evaluate('''() => {
+        const result = [];
+        // Buscar elementos con texto "Zonales", "Áreas", "Estado", etc.
+        const all = Array.from(document.querySelectorAll('select, option, input, div[class], span[class], td'));
+        for (const el of all) {
+            const text = (el.innerText || el.textContent || el.value || '').trim();
+            if (text && (
+                text.includes('Zonales') || text.includes('Áreas') || text.includes('Estado') ||
+                text.includes('PCCT') || text.includes('Revisión') || text.includes('Metropolitana')
+            )) {
+                const rect = el.getBoundingClientRect();
+                result.push({
+                    tag: el.tagName,
+                    cls: el.className || '',
+                    text: text.substring(0, 60),
+                    x: Math.round(rect.x),
+                    y: Math.round(rect.y),
+                    w: Math.round(rect.width),
+                    h: Math.round(rect.height)
+                });
+            }
+        }
+        return result.slice(0, 30);
+    }''')
+    print(f"  → Elementos relevantes encontrados: {len(elementos)}")
+    for el in elementos:
+        print(f"    {el['tag']} cls='{el['cls'][:30]}' text='{el['text']}' pos=({el['x']},{el['y']}) size={el['w']}x{el['h']}")
 
-    # Diagnóstico de checkboxes
-    cbs = await frame.query_selector_all('input[type="checkbox"]')
-    print(f"  → Checkboxes: {len(cbs)}")
-    for i, cb in enumerate(cbs):
-        visible = await cb.is_visible()
-        parent_text = await cb.evaluate('el => el.parentElement ? el.parentElement.innerText.trim() : ""')
-        print(f"    cb[{i}] visible={visible} parent='{parent_text[:50]}'")
+    # ── Buscar el elemento "Áreas" y el select/widget asociado ───────────────
+    # Intentar hacer clic en el widget de Áreas usando evaluación JS directa
+    seleccionado_zonales = await frame.evaluate('''() => {
+        // Buscar todos los <select> incluyendo los ocultos
+        const selects = Array.from(document.querySelectorAll('select'));
+        console.log("Selects totales (incluyendo ocultos):", selects.length);
+        for (const sel of selects) {
+            const opts = Array.from(sel.options).map(o => o.text);
+            if (opts.some(o => o.includes('Zonales'))) {
+                // Seleccionar Zonales
+                for (let i = 0; i < sel.options.length; i++) {
+                    if (sel.options[i].text.includes('Zonales')) {
+                        sel.selectedIndex = i;
+                        sel.dispatchEvent(new Event('change', {bubbles: true}));
+                        return {ok: true, msg: "Zonales seleccionado en select index " + i};
+                    }
+                }
+            }
+        }
+        return {ok: false, msg: "No se encontró select con Zonales. Total selects: " + selects.length};
+    }''')
+    print(f"  → Selección Zonales via JS: {seleccionado_zonales}")
+    await page.wait_for_timeout(1000)
+    await screenshot(page, "04b_post_zonales")
 
-    # Abrir popup de lista (checkbox que no es "bandeja de trabajo")
-    abierto_popup = False
-    for i, cb in enumerate(cbs):
-        if not await cb.is_visible():
-            continue
-        parent_text = await cb.evaluate('el => el.parentElement ? el.parentElement.innerText.trim() : ""')
-        if 'bandeja' in parent_text.lower():
-            continue
-        print(f"  → Click cb[{i}] ('{parent_text[:30]}')")
-        await cb.click()
-        await page.wait_for_timeout(1500)
-        popup = await frame.query_selector('text=Editar lista')
-        if popup:
-            abierto_popup = True
-            print("  ✓ Popup 'Editar lista' OK")
-            break
-        else:
-            await cb.click()  # revertir
-            await page.wait_for_timeout(300)
+    # ── Buscar y hacer clic en el checkbox/botón de lista a la derecha ────────
+    # Inspeccionar la fila de "Áreas" para encontrar el botón de lista
+    btn_lista_info = await frame.evaluate('''() => {
+        // Buscar todas las celdas/divs que contengan "Áreas"
+        const all = Array.from(document.querySelectorAll('td, div, span, label'));
+        for (const el of all) {
+            const text = (el.innerText || el.textContent || '').trim();
+            if (text === 'Áreas:' || text === 'Áreas') {
+                // Buscar elementos hermanos o dentro del mismo row/parent
+                const row = el.closest('tr') || el.parentElement;
+                if (row) {
+                    const inputs = row.querySelectorAll('input, button, img');
+                    const result = [];
+                    for (const inp of inputs) {
+                        const rect = inp.getBoundingClientRect();
+                        result.push({
+                            tag: inp.tagName,
+                            type: inp.type || '',
+                            cls: inp.className || '',
+                            x: Math.round(rect.x),
+                            y: Math.round(rect.y),
+                            visible: rect.width > 0
+                        });
+                    }
+                    return {found: true, row_tag: row.tagName, inputs: result};
+                }
+            }
+        }
+        return {found: false};
+    }''')
+    print(f"  → Fila Áreas: {btn_lista_info}")
 
-    await screenshot(page, "04b_popup")
+    # Si encontramos el botón de lista, hacer clic en él
+    if btn_lista_info.get('found') and btn_lista_info.get('inputs'):
+        for inp in btn_lista_info['inputs']:
+            if inp['visible'] and inp['type'] in ('checkbox', 'button', 'image', ''):
+                x, y = inp['x'] + 5, inp['y'] + 5
+                print(f"  → Click en botón lista en ({x}, {y})")
+                await page.mouse.click(x, y)
+                await page.wait_for_timeout(1500)
+                await screenshot(page, "04c_popup_lista")
 
-    if abierto_popup:
-        popup_cbs = await frame.query_selector_all('input[type="checkbox"]')
-        # Desmarcar Todos
-        for cb in popup_cbs:
-            if not await cb.is_visible():
-                continue
-            parent_text = await cb.evaluate('el => el.parentElement ? el.parentElement.innerText.trim() : ""')
-            if 'Todos' in parent_text and await cb.is_checked():
-                await cb.click()
-                await page.wait_for_timeout(400)
-                print("  ✓ Todos desmarcado")
+                # Verificar si abrió el popup
+                popup_lista = await frame.query_selector('text=Editar lista')
+                if popup_lista:
+                    print("  ✓ Popup 'Editar lista' abierto")
+                    # Seleccionar Metropolitana via JS
+                    resultado = await frame.evaluate('''() => {
+                        const cbs = Array.from(document.querySelectorAll("input[type='checkbox']"));
+                        let desmarcados = 0, marcados = 0;
+                        for (const cb of cbs) {
+                            const parent = cb.parentElement;
+                            const text = parent ? (parent.innerText || parent.textContent || '').trim() : '';
+                            if (text === 'Todos' || text.includes('Todos')) {
+                                if (cb.checked) { cb.click(); desmarcados++; }
+                            }
+                            if (text.includes('Metropolitana')) {
+                                if (!cb.checked) { cb.click(); marcados++; }
+                            }
+                        }
+                        return {desmarcados, marcados};
+                    }''')
+                    print(f"  → Resultado selección: {resultado}")
+                    await page.wait_for_timeout(500)
+                    await screenshot(page, "04d_metropolitana")
+
+                    # Clic en Aceptar del popup
+                    aceptar = await frame.evaluate('''() => {
+                        const btns = Array.from(document.querySelectorAll("button, input[type='button']"));
+                        for (const btn of btns) {
+                            const text = (btn.innerText || btn.value || '').trim();
+                            if (text === 'Aceptar' && btn.offsetParent !== null) {
+                                const rect = btn.getBoundingClientRect();
+                                return {x: Math.round(rect.x), y: Math.round(rect.y), text};
+                            }
+                        }
+                        return null;
+                    }''')
+                    if aceptar:
+                        await page.mouse.click(aceptar['x'] + 5, aceptar['y'] + 5)
+                        print("  ✓ Aceptar popup")
+                    await page.wait_for_timeout(1000)
                 break
 
-        # Marcar Metropolitana
-        popup_cbs = await frame.query_selector_all('input[type="checkbox"]')
-        for cb in popup_cbs:
-            if not await cb.is_visible():
-                continue
-            parent_text = await cb.evaluate('el => el.parentElement ? el.parentElement.innerText.trim() : ""')
-            if 'Metropolitana' in parent_text:
-                if not await cb.is_checked():
-                    await cb.click()
-                print(f"  ✓ Marcado: '{parent_text}'")
-                break
+    await screenshot(page, "04e_post_popup")
 
-        await screenshot(page, "04c_metropolitana")
-
-        # Aceptar popup
-        btns = await frame.query_selector_all('button, input[type="button"]')
-        for btn in btns:
-            if not await btn.is_visible():
-                continue
-            txt = await btn.inner_text()
-            val = await btn.get_attribute('value') or ''
-            if 'Aceptar' in txt or 'Aceptar' in val:
-                await btn.click()
-                print("  ✓ Aceptar popup")
-                break
-        await page.wait_for_timeout(1000)
-    else:
-        print("  ⚠️ No se abrió popup — continuando sin filtro de área")
-
-    await screenshot(page, "04d_post_popup")
-
-    # Estado = Revisión y Autorización PCCT
-    selects = await frame.query_selector_all('select')
-    for sel in selects:
-        opts = await sel.evaluate('el => Array.from(el.options).map(o => o.text)')
-        if any('PCCT' in o for o in opts):
-            for opt in opts:
-                if ESTADO_FILTRO in opt:
-                    await sel.select_option(label=opt)
-                    print(f"  ✓ Estado → '{opt}'")
-                    break
-            break
+    # ── Seleccionar Estado = "Revisión y Autorización PCCT" ──────────────────
+    estado_result = await frame.evaluate(f'''() => {{
+        const selects = Array.from(document.querySelectorAll("select"));
+        for (const sel of selects) {{
+            const opts = Array.from(sel.options).map(o => o.text);
+            if (opts.some(o => o.includes('PCCT'))) {{
+                for (let i = 0; i < sel.options.length; i++) {{
+                    if (sel.options[i].text.includes('PCCT')) {{
+                        sel.selectedIndex = i;
+                        sel.dispatchEvent(new Event('change', {{bubbles: true}}));
+                        return {{ok: true, opcion: sel.options[i].text}};
+                    }}
+                }}
+            }}
+        }}
+        return {{ok: false, msg: "Select PCCT no encontrado"}};
+    }}''')
+    print(f"  → Estado PCCT: {estado_result}")
     await page.wait_for_timeout(500)
-    await screenshot(page, "04e_estado")
+    await screenshot(page, "04f_estado")
 
-    # Aplicar
-    btns = await frame.query_selector_all('button, input[type="button"], a')
-    for btn in btns:
-        if not await btn.is_visible():
-            continue
-        txt = await btn.inner_text()
-        val = await btn.get_attribute('value') or ''
-        if 'Aplicar' in txt or 'Aplicar' in val:
-            await btn.click()
-            print("  ✓ Aplicar")
-            break
+    # ── Clic en "Aplicar" ────────────────────────────────────────────────────
+    aplicar_result = await frame.evaluate('''() => {
+        const btns = Array.from(document.querySelectorAll("button, input[type='button'], a"));
+        for (const btn of btns) {
+            const text = (btn.innerText || btn.value || btn.textContent || '').trim();
+            if (text === 'Aplicar' && btn.offsetParent !== null) {
+                const rect = btn.getBoundingClientRect();
+                return {x: Math.round(rect.x), y: Math.round(rect.y)};
+            }
+        }
+        return null;
+    }''')
+    if aplicar_result:
+        await page.mouse.click(aplicar_result['x'] + 5, aplicar_result['y'] + 5)
+        print("  ✓ Clic en Aplicar")
+    else:
+        # fallback
+        await frame.click('text=Aplicar')
 
     await page.wait_for_load_state("networkidle", timeout=30_000)
     await page.wait_for_timeout(3000)
@@ -235,24 +303,29 @@ async def aprobar_pts(page, frame):
                 break
             id_pt = (await primera_celda.inner_text()).strip()
             if not re.match(r'\d{4}-\d{5}', id_pt):
-                print(f"  ✓ Sin PT's (celda='{id_pt}')")
+                print(f"  ✓ Sin PT's válidos (celda='{id_pt}')")
                 break
 
             print(f"  → PT {id_pt} (iter {iteracion})")
             await frame.click('table tbody tr:first-child')
             await page.wait_for_timeout(800)
+
+            # Clic en Aprobar (botón en barra de herramientas)
             await frame.click('a:has-text("Aprobar"), button:has-text("Aprobar")')
             await page.wait_for_timeout(1500)
 
-            btns = await frame.query_selector_all('button, input[type="button"]')
-            for btn in btns:
-                if not await btn.is_visible():
-                    continue
-                txt = await btn.inner_text()
-                val = await btn.get_attribute('value') or ''
-                if 'Aceptar' in txt or 'Aceptar' in val:
-                    await btn.click()
-                    break
+            # Clic en Aceptar del popup via JS (más confiable)
+            await frame.evaluate('''() => {
+                const btns = Array.from(document.querySelectorAll("button, input[type='button']"));
+                for (const btn of btns) {
+                    const text = (btn.innerText || btn.value || '').trim();
+                    if (text === 'Aceptar' && btn.offsetParent !== null) {
+                        btn.click();
+                        return true;
+                    }
+                }
+                return false;
+            }''')
 
             await page.wait_for_load_state("networkidle", timeout=15_000)
             await page.wait_for_timeout(2000)
