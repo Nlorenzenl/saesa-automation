@@ -1,6 +1,7 @@
 """
 Automatización SAESA – Autorización diaria de PT's
-Solución: usar la API de ExtJS directamente via JS para manipular los combos
+Filtro: Estado = PCCT + bandeja de trabajo
+Aprobación: SOLO PT's cuya columna Área contenga "Metropolitana"
 """
 
 import asyncio
@@ -20,6 +21,7 @@ GMAIL_PASS    = os.environ["GMAIL_APP_PASS"]
 EMAIL_DEST    = os.environ["EMAIL_DEST"]
 TIMEOUT       = 30_000
 ESTADO_FILTRO = "Revisión y Autorización PCCT"
+AREA_REQUERIDA = "Metropolitana"  # Solo aprobamos PT's cuya área contenga esta palabra
 
 
 async def screenshot(page, nombre):
@@ -30,11 +32,9 @@ async def screenshot(page, nombre):
 
 
 async def get_content_frame(page):
-    """Obtiene el iframe 'content' donde vive el DMS."""
     for f in page.frames:
         if f.name == 'content':
             return f
-    # Fallback: cualquier frame con Planificación
     for f in page.frames:
         try:
             await f.wait_for_selector('text=Planificación', timeout=2000)
@@ -60,6 +60,7 @@ async def hacer_login(page):
     await page.wait_for_load_state("networkidle", timeout=30_000)
     await page.wait_for_timeout(2000)
     print("  ✓ Login OK")
+    await screenshot(page, "01_login_ok")
 
 
 async def navegar_a_permisos(page):
@@ -74,7 +75,6 @@ async def navegar_a_permisos(page):
 
     frame = await get_content_frame(page)
     print(f"  → frame: '{frame.name}'")
-
     await frame.click('text=Planificación')
     await page.wait_for_timeout(1000)
     await frame.click('text=Permisos de trabajo')
@@ -84,295 +84,252 @@ async def navegar_a_permisos(page):
     return frame
 
 
-async def aplicar_filtro(page, frame):
-    print("\n[3] FILTRO")
+async def aplicar_filtro_estado(page, frame):
+    """Aplica solo el filtro de Estado = PCCT (que sabemos que funciona)."""
+    print("\n[3] FILTRO (solo Estado PCCT)")
     await frame.click('text=Filtro')
     await page.wait_for_timeout(2500)
     await screenshot(page, "04_filtro_abierto")
 
-    # ── Usar API ExtJS directamente para manipular los componentes ─────────────
-    # ExtJS guarda todos los componentes en Ext.ComponentMgr (o Ext.getCmp)
-    # Podemos iterar todos los componentes y encontrar los combos por su store/value
-
-    resultado = await frame.evaluate('''() => {
-        const log = [];
-        try {
-            // Obtener todos los componentes ExtJS registrados
-            const cm = Ext.ComponentMgr || Ext.ComponentManager;
-            if (!cm) return {error: "No Ext.ComponentMgr"};
-
-            const all = [];
-            cm.each ? cm.each(c => all.push(c)) : Object.values(cm.map || {}).forEach(c => all.push(c));
-
-            log.push("Total componentes: " + all.length);
-
-            // Buscar combos (ComboBox)
-            const combos = all.filter(c => c.isXType && c.isXType("combo"));
-            log.push("Combos: " + combos.length);
-
-            const results = [];
-            combos.forEach((c, i) => {
-                try {
-                    const store = c.store;
-                    let storeData = [];
-                    if (store && store.data) {
-                        store.data.each ? store.data.each(r => storeData.push(r.data)) : null;
-                    }
-                    results.push({
-                        i, id: c.id,
-                        value: c.getValue ? c.getValue() : null,
-                        rawValue: c.getRawValue ? c.getRawValue() : null,
-                        storeData: storeData.slice(0,5),
-                        hidden: c.hidden
-                    });
-                } catch(e) { results.push({i, error: e.message}); }
-            });
-            return {log, combos: results};
-        } catch(e) {
-            return {error: e.message, log};
-        }
-    }''')
-    print(f"  → ExtJS API: {resultado}")
-    await page.wait_for_timeout(500)
-
-    # ── Estrategia directa: usar setValue() de ExtJS en los combos ────────────
-    set_result = await frame.evaluate('''() => {
-        const log = [];
-        try {
-            const cm = Ext.ComponentMgr || Ext.ComponentManager;
-            const all = [];
-            cm.each ? cm.each(c => all.push(c)) : Object.values(cm.map || {}).forEach(c => all.push(c));
-
-            // Encontrar el combo de Áreas (tiene opciones como CIREN, Zonales, etc.)
-            let areasCombo = null;
-            let estadoCombo = null;
-
-            all.forEach(c => {
-                if (!c.isXType || !c.isXType("combo") || c.hidden) return;
-                try {
-                    const store = c.store;
-                    if (!store) return;
-                    let hasZonales = false, hasPCCT = false;
-                    if (store.data && store.data.each) {
-                        store.data.each(r => {
-                            const v = JSON.stringify(r.data || {});
-                            if (v.includes("Zonales")) hasZonales = true;
-                            if (v.includes("PCCT")) hasPCCT = true;
-                        });
-                    }
-                    if (hasZonales) areasCombo = c;
-                    if (hasPCCT) estadoCombo = c;
-                } catch(e) {}
-            });
-
-            if (areasCombo) {
-                log.push("areasCombo encontrado: " + areasCombo.id);
-                // Buscar el record de "Zonales"
-                let zonalesRecord = null;
-                areasCombo.store.data.each(r => {
-                    if (JSON.stringify(r.data).includes("Zonales")) zonalesRecord = r;
-                });
-                if (zonalesRecord) {
-                    areasCombo.setValue(zonalesRecord.get(areasCombo.valueField || "id"));
-                    areasCombo.fireEvent("select", areasCombo, zonalesRecord, 0);
-                    log.push("Zonales seleccionado: " + JSON.stringify(zonalesRecord.data));
-                } else {
-                    log.push("Record Zonales no encontrado");
-                }
-            } else {
-                log.push("areasCombo NO encontrado");
-            }
-
-            if (estadoCombo) {
-                log.push("estadoCombo encontrado: " + estadoCombo.id);
-                let pcctRecord = null;
-                estadoCombo.store.data.each(r => {
-                    if (JSON.stringify(r.data).includes("PCCT")) pcctRecord = r;
-                });
-                if (pcctRecord) {
-                    estadoCombo.setValue(pcctRecord.get(estadoCombo.valueField || "id"));
-                    estadoCombo.fireEvent("select", estadoCombo, pcctRecord, 0);
-                    log.push("PCCT seleccionado: " + JSON.stringify(pcctRecord.data).substring(0, 100));
-                }
-            } else {
-                log.push("estadoCombo NO encontrado");
-            }
-
-            return {log};
-        } catch(e) {
-            return {error: e.message, log};
-        }
-    }''')
-    print(f"  → setValue ExtJS: {set_result}")
-    await page.wait_for_timeout(1500)
-    await screenshot(page, "04b_post_extjs_set")
-
-    # ── Después de seleccionar Zonales, hacer clic en list-trigger ────────────
-    # El list-trigger abre el popup "Editar lista" para elegir áreas específicas
-    # Coordenadas dentro del iframe content: (838, 495)
-    # Usar frame.click con selector CSS específico
-    list_trigger_clicked = await frame.evaluate('''() => {
-        const lt = document.querySelector("img.x-form-list-trigger");
-        if (lt && lt.offsetParent) {
-            lt.click();
-            return {ok: true};
-        }
-        return {ok: false};
-    }''')
-    print(f"  → list-trigger click: {list_trigger_clicked}")
-    await page.wait_for_timeout(2000)
-    await screenshot(page, "04c_popup_lista")
-
-    # Verificar popup en frame content
-    popup_ok = await frame.evaluate('''() =>
-        Array.from(document.querySelectorAll("*")).some(
-            el => el.offsetParent && (el.innerText || "").trim() === "Editar lista"
-        )
-    ''')
-    print(f"  → Popup 'Editar lista' en frame content: {popup_ok}")
-
-    if popup_ok:
-        # Desmarcar Todos, marcar Metropolitana
-        r = await frame.evaluate('''() => {
-            const cbs = Array.from(document.querySelectorAll("input[type='checkbox']"));
-            let desmarcados = 0, marcados = 0;
-            // Desmarcar Todos
-            for (const cb of cbs) {
-                if (!cb.offsetParent) continue;
-                const p = cb.closest("div,td,li,tr") || cb.parentElement;
-                if (p && p.innerText.trim() === "Todos" && cb.checked) { cb.click(); desmarcados++; }
-            }
-            // Marcar Metropolitana
-            for (const cb of document.querySelectorAll("input[type='checkbox']")) {
-                if (!cb.offsetParent) continue;
-                const p = cb.closest("div,td,li,tr") || cb.parentElement;
-                if (p && p.innerText.includes("Metropolitana") && !cb.checked) { cb.click(); marcados++; }
-            }
-            return {desmarcados, marcados};
-        }''')
-        print(f"  → Selección Metropolitana: {r}")
-        await page.wait_for_timeout(300)
-        await screenshot(page, "04d_metropolitana")
-
-        # Aceptar
-        aceptar = await frame.evaluate('''() => {
-            for (const btn of document.querySelectorAll("button,input[type='button']")) {
-                if (!btn.offsetParent) continue;
-                if ((btn.innerText || btn.value || "").trim() === "Aceptar") {
-                    btn.click(); return true;
-                }
-            }
-            return false;
-        }''')
-        print(f"  → Aceptar popup: {aceptar}")
-        await page.wait_for_timeout(1000)
-
-    await screenshot(page, "04e_post_lista")
-
-    # ── Seleccionar Estado PCCT si el ExtJS set no funcionó ───────────────────
-    # (Ya lo intentamos via ExtJS arriba, pero como fallback hacemos clic manual)
-    estado_check = await frame.evaluate('''() => {
-        // Verificar si ya hay valor en el campo Estado
+    # El Estado PCCT se selecciona via clic en el arrow trigger y luego en el item
+    # Sabemos que el frame 'content' tiene el arrow en y≈521 y el dropdown aparece en ese frame
+    estado_ok = await frame.evaluate(f'''() => {{
+        // Buscar el arrow trigger del campo Estado (y≈521 en coordenadas del iframe)
         const triggers = Array.from(document.querySelectorAll("img.x-form-arrow-trigger"));
-        const estadoTrigger = triggers.find(t => {
+        // El trigger de Estado es el que está más cerca del label "Estado:"
+        // Basado en logs anteriores: el Estado está en y≈521 dentro del iframe
+        // Intentar disparar clic en todos y ver cuál abre el dropdown correcto
+        for (const t of triggers) {{
             const r = t.getBoundingClientRect();
-            return r.y > 515 && r.y < 535 && r.x > 830;
-        });
-        if (estadoTrigger) {
-            const input = estadoTrigger.previousElementSibling;
-            return {val: input ? input.value : "no input", found: true};
-        }
-        return {found: false};
-    }''')
-    print(f"  → Estado actual: {estado_check}")
+            if (r.y > 515 && r.y < 540 && r.x > 830) {{
+                t.click();
+                return {{found: true, x: Math.round(r.x), y: Math.round(r.y)}};
+            }}
+        }}
+        // Fallback: último arrow trigger visible
+        const visible = triggers.filter(t => t.offsetParent);
+        if (visible.length > 0) {{
+            const last = visible[visible.length - 1];
+            last.click();
+            const r = last.getBoundingClientRect();
+            return {{found: true, via: "last", x: Math.round(r.x), y: Math.round(r.y)}};
+        }}
+        return {{found: false}};
+    }}''')
+    print(f"  → Click arrow Estado: {estado_ok}")
+    await page.wait_for_timeout(1500)
+    await screenshot(page, "04b_dropdown_estado")
+
+    # Seleccionar PCCT en el dropdown (funciona en frame 'content')
+    pcct_ok = await frame.evaluate(f'''() => {{
+        const all = Array.from(document.querySelectorAll("div,li,td,span"));
+        for (const el of all) {{
+            if (!el.offsetParent) continue;
+            const t = (el.innerText || "").trim();
+            if (t.includes("PCCT") && t.includes("Revisión") && t.length < 60) {{
+                el.click();
+                return {{ok: true, text: t}};
+            }}
+        }}
+        return {{ok: false}};
+    }}''')
+    print(f"  → PCCT seleccionado: {pcct_ok}")
+    await page.wait_for_timeout(500)
+    await screenshot(page, "04c_estado_pcct")
 
     # Clic en Aplicar
-    aplicar_ok = await frame.evaluate('''() => {
+    await frame.evaluate('''() => {
         const btns = Array.from(document.querySelectorAll("button,input[type='button'],a,span"));
         for (const btn of btns) {
             if (!btn.offsetParent) continue;
             const t = (btn.innerText || btn.value || btn.textContent || "").trim();
-            if (t === "Aplicar") { btn.click(); return true; }
+            if (t === "Aplicar") { btn.click(); return; }
         }
-        return false;
     }''')
-    print(f"  → Aplicar: {aplicar_ok}")
-
+    print("  ✓ Aplicar")
     await page.wait_for_load_state("networkidle", timeout=30_000)
     await page.wait_for_timeout(3000)
     await screenshot(page, "05_filtro_aplicado")
     print("  ✓ Filtro aplicado")
 
 
-async def aprobar_pts(page, frame):
-    print("\n[4] APROBANDO PT's")
-    pts_aprobados, pts_fallidos = [], []
-    iteracion = 0
+async def leer_todos_los_pts(frame):
+    """
+    Lee TODOS los PT's de la lista paginada (puede haber varias páginas).
+    Retorna lista de dicts: {id, area, descripcion, fila_idx}
+    Solo incluye PT's cuya área contenga "Metropolitana".
+    """
+    pts_metropolitana = []
+    pts_omitidos = []
+    pagina = 1
 
-    while iteracion < 100:
-        iteracion += 1
-        try:
-            primera_celda = await frame.query_selector('table tbody tr:first-child td:first-child')
-            if primera_celda is None:
-                print("  ✓ Lista vacía.")
-                break
-            id_pt = (await primera_celda.inner_text()).strip()
+    while True:
+        print(f"  → Leyendo página {pagina}...")
+        await frame.wait_for_timeout(1000)
+
+        filas = await frame.query_selector_all('table tbody tr')
+        print(f"    Filas en página {pagina}: {len(filas)}")
+
+        for i, fila in enumerate(filas):
+            celdas = await fila.query_selector_all('td')
+            if len(celdas) < 3:
+                continue
+            id_pt   = (await celdas[0].inner_text()).strip()
+            area_pt = (await celdas[2].inner_text()).strip()  # columna Área
+            desc_pt = (await celdas[-1].inner_text()).strip()[:60]
+
             if not re.match(r'\d{4}-\d{5}', id_pt):
-                print(f"  ✓ Sin PT's (celda='{id_pt}')")
-                break
+                continue
 
-            print(f"  → PT {id_pt} (iter {iteracion})")
-            await frame.click('table tbody tr:first-child')
-            await page.wait_for_timeout(800)
+            if AREA_REQUERIDA.lower() in area_pt.lower():
+                pts_metropolitana.append({"id": id_pt, "area": area_pt, "desc": desc_pt})
+                print(f"    ✅ {id_pt} | {area_pt[:35]}")
+            else:
+                pts_omitidos.append({"id": id_pt, "area": area_pt})
+                print(f"    ⏭️  {id_pt} | {area_pt[:35]} — OMITIDO (no es Metropolitana)")
+
+        # Verificar si hay página siguiente
+        siguiente = await frame.query_selector('button[id*="next"]:not([disabled]), .x-tbar-page-next:not(.x-item-disabled), [class*="page-next"]:not([disabled])')
+        if siguiente:
+            await siguiente.click()
+            await frame.wait_for_timeout(2000)
+            pagina += 1
+        else:
+            break
+
+    return pts_metropolitana, pts_omitidos
+
+
+async def aprobar_pts(page, frame):
+    """
+    Aprueba los PT's uno a uno.
+    Estrategia: buscar cada PT por su ID en la lista y aprobarlo.
+    Solo aprueba PT's cuya área sea Metropolitana.
+    """
+    print("\n[4] LEYENDO PT's DE LA LISTA")
+    pts_metro, pts_omitidos = await leer_todos_los_pts(frame)
+
+    print(f"\n  → PT's Metropolitana a aprobar: {len(pts_metro)}")
+    print(f"  → PT's omitidos (otra zona): {len(pts_omitidos)}")
+
+    if not pts_metro:
+        print("  ✓ No hay PT's Metropolitana para aprobar hoy.")
+        await screenshot(page, "06_final")
+        return [], []
+
+    print("\n[5] APROBANDO PT's METROPOLITANA")
+    pts_aprobados = []
+    pts_fallidos  = []
+
+    # Volver a página 1 si navegamos
+    try:
+        primera_pag = await frame.query_selector('button[id*="first"], .x-tbar-page-first, [class*="page-first"]')
+        if primera_pag:
+            await primera_pag.click()
+            await frame.wait_for_timeout(1500)
+    except Exception:
+        pass
+
+    for pt in pts_metro:
+        try:
+            print(f"\n  → Buscando PT {pt['id']} en la lista...")
+
+            # Buscar la fila con este ID en la tabla actual
+            encontrado = False
+            for intento in range(3):  # máx 3 páginas buscando
+                filas = await frame.query_selector_all('table tbody tr')
+                for fila in filas:
+                    celdas = await fila.query_selector_all('td')
+                    if not celdas:
+                        continue
+                    id_celda = (await celdas[0].inner_text()).strip()
+                    if id_celda == pt['id']:
+                        # Hacer clic en la fila para seleccionarla
+                        await fila.click()
+                        await page.wait_for_timeout(800)
+                        encontrado = True
+                        print(f"    ✓ Fila encontrada")
+                        break
+
+                if encontrado:
+                    break
+
+                # No encontrado en esta página, ir a siguiente
+                siguiente = await frame.query_selector('button[id*="next"]:not([disabled]), .x-tbar-page-next:not(.x-item-disabled)')
+                if siguiente:
+                    await siguiente.click()
+                    await frame.wait_for_timeout(1500)
+                else:
+                    break
+
+            if not encontrado:
+                pts_fallidos.append(f"{pt['id']} (no encontrado en tabla)")
+                print(f"    ✗ PT {pt['id']} no encontrado en la tabla")
+                continue
+
+            # Clic en botón "Aprobar" de la barra
             await frame.click('a:has-text("Aprobar"), button:has-text("Aprobar")')
             await page.wait_for_timeout(1500)
+            await screenshot(page, f"aprobar_{pt['id']}")
 
-            # Aceptar popup en frame content
-            aceptar = await frame.evaluate('''() => {
+            # Aceptar el popup (sin comentario)
+            aceptar_ok = await frame.evaluate('''() => {
                 for (const btn of document.querySelectorAll("button,input[type='button']")) {
                     if (!btn.offsetParent) continue;
-                    if ((btn.innerText || btn.value || "").trim() === "Aceptar") { btn.click(); return true; }
+                    if ((btn.innerText || btn.value || "").trim() === "Aceptar") {
+                        btn.click(); return true;
+                    }
                 }
                 return false;
             }''')
-            if not aceptar:
-                # Fallback en page
+            if not aceptar_ok:
+                # Fallback en page principal
                 await page.evaluate('''() => {
                     for (const btn of document.querySelectorAll("button,input[type='button']")) {
                         if (!btn.offsetParent) continue;
-                        if ((btn.innerText || btn.value || "").trim() === "Aceptar") { btn.click(); return; }
+                        if ((btn.innerText || btn.value || "").trim() === "Aceptar") {
+                            btn.click();
+                        }
                     }
                 }''')
 
             await page.wait_for_load_state("networkidle", timeout=15_000)
             await page.wait_for_timeout(2000)
-            pts_aprobados.append(id_pt)
-            print(f"  ✓ {id_pt} aprobado")
+            pts_aprobados.append(pt['id'])
+            print(f"    ✓ {pt['id']} APROBADO")
 
         except PlaywrightTimeout:
-            print(f"  ⚠️ Timeout iter {iteracion}")
-            break
+            pts_fallidos.append(f"{pt['id']} (timeout)")
+            print(f"    ✗ Timeout aprobando {pt['id']}")
         except Exception as e:
             msg = str(e)[:80]
-            pts_fallidos.append(f"iter-{iteracion}: {msg}")
-            print(f"  ✗ {msg}")
-            await screenshot(page, f"error_{iteracion}")
-            await page.wait_for_timeout(2000)
+            pts_fallidos.append(f"{pt['id']}: {msg}")
+            print(f"    ✗ Error: {msg}")
+            await screenshot(page, f"error_{pt['id']}")
 
     await screenshot(page, "06_final")
     return pts_aprobados, pts_fallidos
 
 
-def enviar_reporte(pts_aprobados, pts_fallidos, error_critico=None):
+def enviar_reporte(pts_aprobados, pts_fallidos, pts_omitidos=None, error_critico=None):
     fecha = datetime.now().strftime("%d/%m/%Y %H:%M")
+    omitidos = pts_omitidos or []
+
     lista_ok = "".join(
         f"<tr><td style='padding:4px 12px'>✅</td><td style='font-family:monospace;padding:4px 12px'>{pt}</td></tr>"
         for pt in pts_aprobados
     ) or "<tr><td colspan='2' style='padding:4px 12px;color:#888'>Ninguno</td></tr>"
+
     lista_err = "".join(
         f"<tr><td style='padding:4px 12px'>❌</td><td style='padding:4px 12px'>{pt}</td></tr>"
         for pt in pts_fallidos
     ) or "<tr><td colspan='2' style='padding:4px 12px;color:#888'>Sin errores</td></tr>"
+
+    lista_omit = "".join(
+        f"<tr><td style='padding:4px 12px'>⏭️</td><td style='padding:4px 12px;color:#888'>{pt['id']} — {pt['area'][:50]}</td></tr>"
+        for pt in omitidos
+    ) or "<tr><td colspan='2' style='padding:4px 12px;color:#888'>Ninguno</td></tr>"
+
     error_bloque = (
         f"<div style='background:#fff0f0;border-left:4px solid #c00;padding:12px;margin:16px 0'>"
         f"<strong>⚠️ Error crítico:</strong><br><code>{error_critico}</code></div>"
@@ -385,17 +342,22 @@ def enviar_reporte(pts_aprobados, pts_fallidos, error_critico=None):
       </div>
       <div style="border:1px solid #ddd;border-top:none;padding:20px;border-radius:0 0 8px 8px">
         <p><strong>Fecha:</strong> {fecha}</p>
+        <p><strong>Filtro aplicado:</strong> Estado = {ESTADO_FILTRO}</p>
+        <p><strong>Criterio de aprobación:</strong> Solo PT's con área que contenga "{AREA_REQUERIDA}"</p>
         {error_bloque}
-        <h3 style="color:#006600">✅ Aprobados ({len(pts_aprobados)})</h3>
+        <h3 style="color:#006600">✅ PT's Aprobados ({len(pts_aprobados)})</h3>
         <table style="border-collapse:collapse;width:100%">{lista_ok}</table>
-        <h3 style="color:#cc0000;margin-top:20px">❌ Errores ({len(pts_fallidos)})</h3>
+        <h3 style="color:#cc0000;margin-top:20px">❌ PT's con Error ({len(pts_fallidos)})</h3>
         <table style="border-collapse:collapse;width:100%">{lista_err}</table>
+        <h3 style="color:#888;margin-top:20px">⏭️ PT's Omitidos por área ({len(omitidos)})</h3>
+        <table style="border-collapse:collapse;width:100%">{lista_omit}</table>
         <p style="color:#999;font-size:11px;margin-top:20px">Bot SAESA – GitHub Actions | Lun–Vie 08:00 Chile</p>
       </div></body></html>"""
 
-    asunto = f"[SAESA] {datetime.now().strftime('%d/%m/%Y')} – {len(pts_aprobados)} PT's aprobados"
+    asunto = f"[SAESA] {datetime.now().strftime('%d/%m/%Y')} – {len(pts_aprobados)} aprobados, {len(omitidos)} omitidos"
     if error_critico:
         asunto = f"[SAESA] ⚠️ ERROR {datetime.now().strftime('%d/%m/%Y')}"
+
     msg = MIMEMultipart("alternative")
     msg["Subject"] = asunto
     msg["From"] = GMAIL_USER
@@ -412,7 +374,7 @@ def enviar_reporte(pts_aprobados, pts_fallidos, error_critico=None):
 
 async def main():
     print(f"\n{'='*55}\n  SAESA | {datetime.now().strftime('%d/%m/%Y %H:%M')}\n{'='*55}")
-    pts_aprobados, pts_fallidos, error_critico = [], [], None
+    pts_aprobados, pts_fallidos, pts_omitidos, error_critico = [], [], [], None
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(
@@ -426,7 +388,7 @@ async def main():
         try:
             await hacer_login(page)
             frame = await navegar_a_permisos(page)
-            await aplicar_filtro(page, frame)
+            await aplicar_filtro_estado(page, frame)
             pts_aprobados, pts_fallidos = await aprobar_pts(page, frame)
         except Exception as e:
             error_critico = str(e)
@@ -435,8 +397,8 @@ async def main():
         finally:
             await browser.close()
 
-    print(f"\n  {len(pts_aprobados)} aprobados | {len(pts_fallidos)} errores")
-    enviar_reporte(pts_aprobados, pts_fallidos, error_critico)
+    print(f"\n  {len(pts_aprobados)} aprobados | {len(pts_fallidos)} errores | {len(pts_omitidos)} omitidos")
+    enviar_reporte(pts_aprobados, pts_fallidos, pts_omitidos, error_critico)
     print("✓ Fin.\n")
 
 
