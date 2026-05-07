@@ -52,12 +52,53 @@ async def esperar_y_click(page, selector, descripcion, timeout=TIMEOUT):
 # ─────────────────────────────────────────────────────────────────────────────
 async def hacer_login(page):
     print("\n[1] LOGIN")
-    await page.goto(SAESA_URL, wait_until="networkidle", timeout=60_000)
-    await page.wait_for_selector('input[name="usuario"]', timeout=TIMEOUT)
-    await page.fill('input[name="usuario"]', SAESA_USER)
-    await page.fill('input[name="password"]', SAESA_PASS)
-    await page.click('input[type="submit"], button[type="submit"], input[value="Login"], button:has-text("Login")')
+    await page.goto(SAESA_URL, wait_until="domcontentloaded", timeout=60_000)
+    await page.wait_for_timeout(3000)
+    await screenshot(page, "00_pagina_cargada")
+
+    # Buscar los inputs de forma flexible (sin depender del atributo name)
+    inputs = await page.query_selector_all('input[type="text"], input:not([type]), input[type="password"]')
+    print(f"  → Inputs encontrados en la página: {len(inputs)}")
+
+    # Imprimir atributos de cada input para diagnóstico
+    for i, inp in enumerate(inputs):
+        name = await inp.get_attribute("name") or ""
+        id_  = await inp.get_attribute("id") or ""
+        typ  = await inp.get_attribute("type") or "text"
+        print(f"    input[{i}] name='{name}' id='{id_}' type='{typ}'")
+
+    # Llenar usuario: primer input de texto visible
+    usuario_filled = False
+    for inp in inputs:
+        typ = (await inp.get_attribute("type") or "text").lower()
+        if typ in ("text", ""):
+            visible = await inp.is_visible()
+            if visible:
+                await inp.fill(SAESA_USER)
+                usuario_filled = True
+                print("  ✓ Usuario ingresado")
+                break
+
+    # Llenar contraseña: primer input type=password
+    pass_filled = False
+    for inp in inputs:
+        typ = (await inp.get_attribute("type") or "").lower()
+        if typ == "password":
+            visible = await inp.is_visible()
+            if visible:
+                await inp.fill(SAESA_PASS)
+                pass_filled = True
+                print("  ✓ Contraseña ingresada")
+                break
+
+    if not usuario_filled or not pass_filled:
+        await screenshot(page, "error_login_inputs")
+        raise Exception(f"No se encontraron los campos de login (usuario={usuario_filled}, pass={pass_filled})")
+
+    # Clic en botón Login
+    await page.click('input[value="Login"], button:has-text("Login"), input[type="submit"]')
     await page.wait_for_load_state("networkidle", timeout=30_000)
+    await page.wait_for_timeout(2000)
     print("  ✓ Login exitoso")
     await screenshot(page, "01_login_ok")
 
