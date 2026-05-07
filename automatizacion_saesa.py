@@ -1,8 +1,5 @@
 """
 Automatización SAESA – Autorización diaria de PT's (Permisos de Trabajo)
-Flujo: Login → Aplicaciones → DMS → Planificación → Permisos de trabajo
-       → Filtro (Zonales / Área Zonal Metropolitana / Revisión y Autorización PCCT)
-       → Aprobar uno a uno → Reporte por correo
 """
 
 import asyncio
@@ -14,425 +11,343 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
 
-# ─────────────────────────────────────────────────────────────────────────────
-# CONFIGURACIÓN  (variables de entorno – definidas como Secrets en GitHub)
-# ─────────────────────────────────────────────────────────────────────────────
-SAESA_URL   = "https://stx.saesa.cl:8091/backend/sts/login.php?backurl=%2Fbackend%2Fsts%2Fcentrality.php"
-SAESA_USER  = os.environ["SAESA_USER"]
-SAESA_PASS  = os.environ["SAESA_PASS"]
-GMAIL_USER  = os.environ["GMAIL_USER"]
-GMAIL_PASS  = os.environ["GMAIL_APP_PASS"]
-EMAIL_DEST  = os.environ["EMAIL_DEST"]
-
-TIMEOUT     = 30_000   # ms – tiempo máximo de espera por elemento
-AREA_ZONAL  = "Area Zonal Metropolitana"
+SAESA_URL     = "https://stx.saesa.cl:8091/backend/sts/login.php?backurl=%2Fbackend%2Fsts%2Fcentrality.php"
+SAESA_USER    = os.environ["SAESA_USER"]
+SAESA_PASS    = os.environ["SAESA_PASS"]
+GMAIL_USER    = os.environ["GMAIL_USER"]
+GMAIL_PASS    = os.environ["GMAIL_APP_PASS"]
+EMAIL_DEST    = os.environ["EMAIL_DEST"]
+TIMEOUT       = 30_000
 ESTADO_FILTRO = "Revisión y Autorización PCCT"
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# HELPERS
-# ─────────────────────────────────────────────────────────────────────────────
 async def screenshot(page, nombre):
-    """Guarda captura de pantalla para diagnóstico (se sube como artefacto en CI)."""
     os.makedirs("capturas", exist_ok=True)
     path = f"capturas/{nombre}_{datetime.now().strftime('%H%M%S')}.png"
     await page.screenshot(path=path, full_page=False)
-    print(f"  📸 Captura: {path}")
+    print(f"  📸 {path}")
 
 
-async def esperar_y_click(page, selector, descripcion, timeout=TIMEOUT):
-    print(f"  → Esperando: {descripcion}...")
-    await page.wait_for_selector(selector, timeout=timeout)
-    await page.click(selector)
-    print(f"  ✓ Clic en: {descripcion}")
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# PASO 1 – LOGIN
-# ─────────────────────────────────────────────────────────────────────────────
 async def hacer_login(page):
     print("\n[1] LOGIN")
     await page.goto(SAESA_URL, wait_until="domcontentloaded", timeout=60_000)
     await page.wait_for_timeout(3000)
     await screenshot(page, "00_pagina_cargada")
 
-    # Buscar los inputs de forma flexible (sin depender del atributo name)
     inputs = await page.query_selector_all('input[type="text"], input:not([type]), input[type="password"]')
-    print(f"  → Inputs encontrados en la página: {len(inputs)}")
-
-    # Imprimir atributos de cada input para diagnóstico
+    print(f"  → Inputs: {len(inputs)}")
     for i, inp in enumerate(inputs):
         name = await inp.get_attribute("name") or ""
         id_  = await inp.get_attribute("id") or ""
         typ  = await inp.get_attribute("type") or "text"
-        print(f"    input[{i}] name='{name}' id='{id_}' type='{typ}'")
+        print(f"    [{i}] name='{name}' id='{id_}' type='{typ}'")
 
-    # Llenar usuario: primer input de texto visible
-    usuario_filled = False
     for inp in inputs:
         typ = (await inp.get_attribute("type") or "text").lower()
-        if typ in ("text", ""):
-            visible = await inp.is_visible()
-            if visible:
-                await inp.fill(SAESA_USER)
-                usuario_filled = True
-                print("  ✓ Usuario ingresado")
-                break
+        if typ in ("text", "") and await inp.is_visible():
+            await inp.fill(SAESA_USER)
+            print("  ✓ Usuario")
+            break
 
-    # Llenar contraseña: primer input type=password
-    pass_filled = False
     for inp in inputs:
-        typ = (await inp.get_attribute("type") or "").lower()
-        if typ == "password":
-            visible = await inp.is_visible()
-            if visible:
-                await inp.fill(SAESA_PASS)
-                pass_filled = True
-                print("  ✓ Contraseña ingresada")
-                break
+        if (await inp.get_attribute("type") or "").lower() == "password" and await inp.is_visible():
+            await inp.fill(SAESA_PASS)
+            print("  ✓ Contraseña")
+            break
 
-    if not usuario_filled or not pass_filled:
-        await screenshot(page, "error_login_inputs")
-        raise Exception(f"No se encontraron los campos de login (usuario={usuario_filled}, pass={pass_filled})")
-
-    # Clic en botón Login
     await page.click('input[value="Login"], button:has-text("Login"), input[type="submit"]')
     await page.wait_for_load_state("networkidle", timeout=30_000)
     await page.wait_for_timeout(2000)
-    print("  ✓ Login exitoso")
+    print("  ✓ Login OK")
     await screenshot(page, "01_login_ok")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# PASO 2 – NAVEGAR A DMS → PLANIFICACIÓN → PERMISOS DE TRABAJO
-# ─────────────────────────────────────────────────────────────────────────────
 async def navegar_a_permisos(page):
-    print("\n[2] NAVEGACIÓN → DMS → Permisos de trabajo")
-
-    # Clic en "Aplicaciones" en el menú lateral izquierdo
-    await esperar_y_click(page, 'a:has-text("Aplicaciones"), span:has-text("Aplicaciones")', "Aplicaciones")
+    print("\n[2] NAVEGACIÓN")
+    await page.wait_for_selector('a:has-text("Aplicaciones"), span:has-text("Aplicaciones")', timeout=TIMEOUT)
+    await page.click('a:has-text("Aplicaciones"), span:has-text("Aplicaciones")')
     await page.wait_for_timeout(1500)
-
-    # Clic en "DMS"
-    await esperar_y_click(page, 'a:has-text("DMS")', "DMS")
+    await page.wait_for_selector('a:has-text("DMS")', timeout=TIMEOUT)
+    await page.click('a:has-text("DMS")')
     await page.wait_for_load_state("networkidle", timeout=30_000)
     await page.wait_for_timeout(2000)
     await screenshot(page, "02_dms")
 
-    # El DMS carga en un iframe – necesitamos trabajar dentro de él
-    # Esperar a que aparezca el menú "Planificación" dentro del frame
-    frame = None
+    frame = page
     for f in page.frames:
         try:
             await f.wait_for_selector('text=Planificación', timeout=5000)
             frame = f
+            print("  → iframe detectado")
             break
         except PlaywrightTimeout:
             continue
 
-    if frame is None:
-        # Si no hay iframe, operar en la página principal
-        frame = page
-
-    # Clic en menú "Planificación"
     await frame.click('text=Planificación')
     await page.wait_for_timeout(1000)
-
-    # Clic en "Permisos de trabajo" del dropdown
     await frame.click('text=Permisos de trabajo')
     await page.wait_for_load_state("networkidle", timeout=30_000)
-    await page.wait_for_timeout(2000)
+    await page.wait_for_timeout(3000)
     await screenshot(page, "03_permisos_trabajo")
-    print("  ✓ En pantalla Permisos de trabajo")
-
+    print("  ✓ En Permisos de trabajo")
     return frame
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# PASO 3 – APLICAR FILTRO
-# ─────────────────────────────────────────────────────────────────────────────
 async def aplicar_filtro(page, frame):
     print("\n[3] FILTRO")
-
-    # Clic en botón "Filtro"
     await frame.click('text=Filtro')
-    await page.wait_for_timeout(1500)
+    await page.wait_for_timeout(2500)
     await screenshot(page, "04_filtro_abierto")
 
-    # ── Campo "Áreas": seleccionar "Zonales" ──────────────────────────────────
-    # El select de Áreas está junto a la etiqueta "Áreas:"
-    areas_select = await frame.query_selector('select')   # puede haber varios selects
-    # Buscar el select correcto por label cercano
-    # Estrategia: buscar todos los <select> y elegir el que tiene opción "Zonales"
+    # Diagnóstico de selects
     selects = await frame.query_selector_all('select')
+    print(f"  → Selects: {len(selects)}")
+    for i, sel in enumerate(selects):
+        opts = await sel.evaluate('el => Array.from(el.options).map(o => o.text)')
+        print(f"    select[{i}]: {opts[:6]}")
+
+    # Seleccionar Zonales
     for sel in selects:
-        options = await sel.inner_text()
-        if 'Zonales' in options:
+        opts = await sel.evaluate('el => Array.from(el.options).map(o => o.text)')
+        if any('Zonales' in o or 'CIREN' in o for o in opts):
             await sel.select_option(label='Zonales')
             print("  ✓ Áreas → Zonales")
+            await page.wait_for_timeout(1000)
             break
-    await page.wait_for_timeout(1000)
 
-    # ── Checkbox del área zonal: clic en el ícono de lista a la derecha ───────
-    # El botón es el pequeño checkbox/ícono a la derecha del select de Zonales
-    # Buscar el botón que abre el popup "Editar lista"
-    try:
-        # Intentar clic en el botón inmediato a la derecha (normalmente un <input type="button"> o un pequeño ícono)
-        await frame.click('input[type="checkbox"][title*="área"], input.area-check, span.area-selector, td:has-text("Zonales") ~ td input', timeout=5000)
-    except PlaywrightTimeout:
-        # Fallback: buscar botón que abre el diálogo de lista
-        btns = await frame.query_selector_all('input[type="button"], button')
-        for btn in btns:
-            txt = await btn.get_attribute('value') or await btn.inner_text()
-            if '...' in txt or 'lista' in txt.lower() or txt.strip() == '':
-                await btn.click()
-                break
-    await page.wait_for_timeout(1500)
+    # Diagnóstico de checkboxes
+    cbs = await frame.query_selector_all('input[type="checkbox"]')
+    print(f"  → Checkboxes: {len(cbs)}")
+    for i, cb in enumerate(cbs):
+        visible = await cb.is_visible()
+        parent_text = await cb.evaluate('el => el.parentElement ? el.parentElement.innerText.trim() : ""')
+        print(f"    cb[{i}] visible={visible} parent='{parent_text[:50]}'")
 
-    # ── En el popup "Editar lista": desmarcar "Todos", marcar "Area Zonal Metropolitana" ──
-    # Primero desmarcar "Todos"
-    try:
-        todos_cb = await frame.query_selector('input[type="checkbox"] + text=Todos, label:has-text("Todos") input')
-        if todos_cb:
-            if await todos_cb.is_checked():
-                await todos_cb.click()
-        await page.wait_for_timeout(500)
-    except Exception:
-        pass
+    # Abrir popup de lista (checkbox que no es "bandeja de trabajo")
+    abierto_popup = False
+    for i, cb in enumerate(cbs):
+        if not await cb.is_visible():
+            continue
+        parent_text = await cb.evaluate('el => el.parentElement ? el.parentElement.innerText.trim() : ""')
+        if 'bandeja' in parent_text.lower():
+            continue
+        print(f"  → Click cb[{i}] ('{parent_text[:30]}')")
+        await cb.click()
+        await page.wait_for_timeout(1500)
+        popup = await frame.query_selector('text=Editar lista')
+        if popup:
+            abierto_popup = True
+            print("  ✓ Popup 'Editar lista' OK")
+            break
+        else:
+            await cb.click()  # revertir
+            await page.wait_for_timeout(300)
 
-    # Marcar "Area Zonal Metropolitana"
-    checkboxes = await frame.query_selector_all('input[type="checkbox"]')
-    for cb in checkboxes:
-        # Buscar el label o texto cercano
-        parent = await cb.evaluate_handle('el => el.parentElement')
-        texto = await parent.inner_text() if parent else ''
-        if AREA_ZONAL.lower() in texto.lower() or 'Metropolitana' in texto:
-            if not await cb.is_checked():
+    await screenshot(page, "04b_popup")
+
+    if abierto_popup:
+        popup_cbs = await frame.query_selector_all('input[type="checkbox"]')
+        # Desmarcar Todos
+        for cb in popup_cbs:
+            if not await cb.is_visible():
+                continue
+            parent_text = await cb.evaluate('el => el.parentElement ? el.parentElement.innerText.trim() : ""')
+            if 'Todos' in parent_text and await cb.is_checked():
                 await cb.click()
-            print(f"  ✓ Seleccionada: {texto.strip()}")
-            break
+                await page.wait_for_timeout(400)
+                print("  ✓ Todos desmarcado")
+                break
 
-    # Clic en "Aceptar" del popup
-    await frame.click('button:has-text("Aceptar"), input[value="Aceptar"]')
-    await page.wait_for_timeout(1000)
+        # Marcar Metropolitana
+        popup_cbs = await frame.query_selector_all('input[type="checkbox"]')
+        for cb in popup_cbs:
+            if not await cb.is_visible():
+                continue
+            parent_text = await cb.evaluate('el => el.parentElement ? el.parentElement.innerText.trim() : ""')
+            if 'Metropolitana' in parent_text:
+                if not await cb.is_checked():
+                    await cb.click()
+                print(f"  ✓ Marcado: '{parent_text}'")
+                break
 
-    # ── Campo "Estado": seleccionar "Revisión y Autorización PCCT" ───────────
-    estado_selects = await frame.query_selector_all('select')
-    for sel in estado_selects:
-        options = await sel.inner_text()
-        if 'PCCT' in options or 'Revisión' in options:
-            await sel.select_option(label=ESTADO_FILTRO)
-            print(f"  ✓ Estado → {ESTADO_FILTRO}")
+        await screenshot(page, "04c_metropolitana")
+
+        # Aceptar popup
+        btns = await frame.query_selector_all('button, input[type="button"]')
+        for btn in btns:
+            if not await btn.is_visible():
+                continue
+            txt = await btn.inner_text()
+            val = await btn.get_attribute('value') or ''
+            if 'Aceptar' in txt or 'Aceptar' in val:
+                await btn.click()
+                print("  ✓ Aceptar popup")
+                break
+        await page.wait_for_timeout(1000)
+    else:
+        print("  ⚠️ No se abrió popup — continuando sin filtro de área")
+
+    await screenshot(page, "04d_post_popup")
+
+    # Estado = Revisión y Autorización PCCT
+    selects = await frame.query_selector_all('select')
+    for sel in selects:
+        opts = await sel.evaluate('el => Array.from(el.options).map(o => o.text)')
+        if any('PCCT' in o for o in opts):
+            for opt in opts:
+                if ESTADO_FILTRO in opt:
+                    await sel.select_option(label=opt)
+                    print(f"  ✓ Estado → '{opt}'")
+                    break
             break
     await page.wait_for_timeout(500)
+    await screenshot(page, "04e_estado")
 
-    # ── Clic en "Aplicar" ────────────────────────────────────────────────────
-    await frame.click('button:has-text("Aplicar"), input[value="Aplicar"], a:has-text("Aplicar")')
+    # Aplicar
+    btns = await frame.query_selector_all('button, input[type="button"], a')
+    for btn in btns:
+        if not await btn.is_visible():
+            continue
+        txt = await btn.inner_text()
+        val = await btn.get_attribute('value') or ''
+        if 'Aplicar' in txt or 'Aplicar' in val:
+            await btn.click()
+            print("  ✓ Aplicar")
+            break
+
     await page.wait_for_load_state("networkidle", timeout=30_000)
-    await page.wait_for_timeout(2000)
+    await page.wait_for_timeout(3000)
     await screenshot(page, "05_filtro_aplicado")
     print("  ✓ Filtro aplicado")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# PASO 4 – LEER LISTA DE PT's
-# ─────────────────────────────────────────────────────────────────────────────
-async def obtener_pts(frame):
-    """Retorna lista de dicts con {id, descripcion} de los PT's visibles."""
-    pts = []
-    try:
-        filas = await frame.query_selector_all('table tbody tr, tr[class*="row"], tr[class*="fila"]')
-        for fila in filas:
-            celdas = await fila.query_selector_all('td')
-            if len(celdas) >= 2:
-                id_pt = (await celdas[0].inner_text()).strip()
-                desc  = (await celdas[-1].inner_text()).strip()
-                if id_pt and re.match(r'\d{4}-\d{5}', id_pt):
-                    pts.append({"id": id_pt, "descripcion": desc[:80]})
-    except Exception as e:
-        print(f"  ⚠️ No se pudo leer la lista: {e}")
-    return pts
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# PASO 5 – APROBAR PT's UNO A UNO
-# ─────────────────────────────────────────────────────────────────────────────
 async def aprobar_pts(page, frame):
-    print("\n[4] APROBACIÓN DE PT's")
-    pts_aprobados = []
-    pts_fallidos  = []
+    print("\n[4] APROBANDO PT's")
+    pts_aprobados, pts_fallidos = [], []
     iteracion = 0
-    max_iter = 100  # seguridad para evitar loop infinito
 
-    while iteracion < max_iter:
+    while iteracion < 100:
         iteracion += 1
-
-        # Leer la primera fila de la tabla (siempre seleccionamos la primera disponible)
         try:
-            primera_fila = await frame.query_selector('table tbody tr:first-child td, tr[class*="row"]:first-child td')
-            if primera_fila is None:
-                print("  ✓ No hay más PT's en la lista. Proceso completado.")
-                break
-
-            # Obtener ID del primer PT
             primera_celda = await frame.query_selector('table tbody tr:first-child td:first-child')
-            id_pt = (await primera_celda.inner_text()).strip() if primera_celda else f"PT-{iteracion}"
-
-            # Si la celda no parece un ID válido, terminamos
+            if primera_celda is None:
+                print("  ✓ Lista vacía.")
+                break
+            id_pt = (await primera_celda.inner_text()).strip()
             if not re.match(r'\d{4}-\d{5}', id_pt):
-                print(f"  ✓ Lista vacía o sin PT's válidos (celda: '{id_pt}'). Proceso completado.")
+                print(f"  ✓ Sin PT's (celda='{id_pt}')")
                 break
 
-            print(f"  → Aprobando PT {id_pt} ({iteracion})...")
-
-            # Seleccionar la primera fila haciendo clic en ella
+            print(f"  → PT {id_pt} (iter {iteracion})")
             await frame.click('table tbody tr:first-child')
             await page.wait_for_timeout(800)
-
-            # Clic en botón "Aprobar" de la barra de herramientas
-            await frame.click('a:has-text("Aprobar"), button:has-text("Aprobar"), input[value="Aprobar"]')
+            await frame.click('a:has-text("Aprobar"), button:has-text("Aprobar")')
             await page.wait_for_timeout(1500)
 
-            # Aparece popup "Aprobar" con campo de comentarios opcional
-            # Clic directo en "Aceptar" (sin agregar comentario)
-            await frame.click('button:has-text("Aceptar"), input[value="Aceptar"]')
-            await page.wait_for_timeout(2000)
+            btns = await frame.query_selector_all('button, input[type="button"]')
+            for btn in btns:
+                if not await btn.is_visible():
+                    continue
+                txt = await btn.inner_text()
+                val = await btn.get_attribute('value') or ''
+                if 'Aceptar' in txt or 'Aceptar' in val:
+                    await btn.click()
+                    break
 
-            # Esperar a que la fila desaparezca (el PT aprobado se va de la lista)
             await page.wait_for_load_state("networkidle", timeout=15_000)
-            await page.wait_for_timeout(1500)
-
+            await page.wait_for_timeout(2000)
             pts_aprobados.append(id_pt)
-            print(f"  ✓ PT {id_pt} aprobado")
+            print(f"  ✓ {id_pt} aprobado")
 
         except PlaywrightTimeout:
-            print(f"  ⚠️ Timeout en iteración {iteracion}, la lista podría estar vacía.")
+            print(f"  ⚠️ Timeout iter {iteracion}")
             break
         except Exception as e:
-            pts_fallidos.append(f"PT-{iteracion} (error: {str(e)[:60]})")
-            print(f"  ✗ Error en iteración {iteracion}: {e}")
+            msg = str(e)[:80]
+            pts_fallidos.append(f"iter-{iteracion}: {msg}")
+            print(f"  ✗ {msg}")
             await screenshot(page, f"error_{iteracion}")
-            # Intentar continuar con el siguiente
             await page.wait_for_timeout(2000)
 
     await screenshot(page, "06_final")
     return pts_aprobados, pts_fallidos
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# PASO 6 – ENVIAR REPORTE POR CORREO
-# ─────────────────────────────────────────────────────────────────────────────
 def enviar_reporte(pts_aprobados, pts_fallidos, error_critico=None):
     fecha = datetime.now().strftime("%d/%m/%Y %H:%M")
-    total_ok  = len(pts_aprobados)
-    total_err = len(pts_fallidos)
-
-    lista_ok  = "".join(f"<tr><td style='padding:4px 12px;'>✅</td><td style='padding:4px 12px;font-family:monospace'>{pt}</td></tr>"
-                        for pt in pts_aprobados) or \
-                "<tr><td colspan='2' style='padding:4px 12px;color:#888'>Ninguno</td></tr>"
-    lista_err = "".join(f"<tr><td style='padding:4px 12px;'>❌</td><td style='padding:4px 12px;'>{pt}</td></tr>"
-                        for pt in pts_fallidos) or \
-                "<tr><td colspan='2' style='padding:4px 12px;color:#888'>Sin errores</td></tr>"
-
-    error_bloque = ""
-    if error_critico:
-        error_bloque = f"""
-        <div style='background:#fff0f0;border-left:4px solid #c00;padding:12px;margin:16px 0;border-radius:4px'>
-          <strong>⚠️ Error crítico:</strong><br><code>{error_critico}</code>
-        </div>"""
-
-    html = f"""
-    <html><body style="font-family:Arial,sans-serif;max-width:640px;margin:auto;color:#222">
+    lista_ok = "".join(
+        f"<tr><td style='padding:4px 12px'>✅</td><td style='font-family:monospace;padding:4px 12px'>{pt}</td></tr>"
+        for pt in pts_aprobados
+    ) or "<tr><td colspan='2' style='padding:4px 12px;color:#888'>Ninguno</td></tr>"
+    lista_err = "".join(
+        f"<tr><td style='padding:4px 12px'>❌</td><td style='padding:4px 12px'>{pt}</td></tr>"
+        for pt in pts_fallidos
+    ) or "<tr><td colspan='2' style='padding:4px 12px;color:#888'>Sin errores</td></tr>"
+    error_bloque = (
+        f"<div style='background:#fff0f0;border-left:4px solid #c00;padding:12px;margin:16px 0'>"
+        f"<strong>⚠️ Error crítico:</strong><br><code>{error_critico}</code></div>"
+        if error_critico else ""
+    )
+    html = f"""<html><body style="font-family:Arial,sans-serif;max-width:640px;margin:auto">
       <div style="background:#003580;color:white;padding:20px;border-radius:8px 8px 0 0">
-        <h2 style="margin:0">📋 Reporte Diario de PT's – SAESA/DMS</h2>
-        <p style="margin:6px 0 0;opacity:0.8">Autorización PCCT – Área Zonal Metropolitana</p>
+        <h2 style="margin:0">📋 Reporte PT's – SAESA/DMS</h2>
+        <p style="margin:4px 0 0;opacity:.8">Autorización PCCT – Área Zonal Metropolitana</p>
       </div>
       <div style="border:1px solid #ddd;border-top:none;padding:20px;border-radius:0 0 8px 8px">
-        <p><strong>Fecha de ejecución:</strong> {fecha}</p>
-        <p><strong>Filtro aplicado:</strong> Zonales → Área Zonal Metropolitana | Estado: Revisión y Autorización PCCT</p>
+        <p><strong>Fecha:</strong> {fecha}</p>
         {error_bloque}
-        <h3 style="color:#006600">✅ PT's Aprobados ({total_ok})</h3>
+        <h3 style="color:#006600">✅ Aprobados ({len(pts_aprobados)})</h3>
         <table style="border-collapse:collapse;width:100%">{lista_ok}</table>
-
-        <h3 style="color:#cc0000;margin-top:24px">❌ PT's con Error ({total_err})</h3>
+        <h3 style="color:#cc0000;margin-top:20px">❌ Errores ({len(pts_fallidos)})</h3>
         <table style="border-collapse:collapse;width:100%">{lista_err}</table>
+        <p style="color:#999;font-size:11px;margin-top:20px">Bot SAESA – GitHub Actions | Lun–Vie 08:00 Chile</p>
+      </div></body></html>"""
 
-        <hr style="margin:24px 0;border:none;border-top:1px solid #eee">
-        <p style="color:#999;font-size:12px">
-          Enviado automáticamente por el bot SAESA – GitHub Actions<br>
-          Ejecución programada: Lunes a Viernes 08:00 hrs (Chile)
-        </p>
-      </div>
-    </body></html>
-    """
-
-    asunto = f"[SAESA] PT's del {datetime.now().strftime('%d/%m/%Y')} – {total_ok} aprobados"
+    asunto = f"[SAESA] {datetime.now().strftime('%d/%m/%Y')} – {len(pts_aprobados)} PT's aprobados"
     if error_critico:
-        asunto = f"[SAESA] ⚠️ ERROR – {datetime.now().strftime('%d/%m/%Y')}"
-
+        asunto = f"[SAESA] ⚠️ ERROR {datetime.now().strftime('%d/%m/%Y')}"
     msg = MIMEMultipart("alternative")
     msg["Subject"] = asunto
-    msg["From"]    = GMAIL_USER
-    msg["To"]      = EMAIL_DEST
+    msg["From"] = GMAIL_USER
+    msg["To"] = EMAIL_DEST
     msg.attach(MIMEText(html, "html"))
-
     try:
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-            server.login(GMAIL_USER, GMAIL_PASS)
-            server.sendmail(GMAIL_USER, EMAIL_DEST, msg.as_string())
-        print("\n  ✓ Reporte enviado a:", EMAIL_DEST)
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
+            s.login(GMAIL_USER, GMAIL_PASS)
+            s.sendmail(GMAIL_USER, EMAIL_DEST, msg.as_string())
+        print(f"  ✓ Correo enviado a {EMAIL_DEST}")
     except Exception as e:
-        print(f"\n  ✗ Error al enviar correo: {e}")
+        print(f"  ✗ Error correo: {e}")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# MAIN
-# ─────────────────────────────────────────────────────────────────────────────
 async def main():
-    print(f"\n{'='*60}")
-    print(f"  SAESA – Autorización PT's  |  {datetime.now().strftime('%d/%m/%Y %H:%M')}")
-    print(f"{'='*60}")
-
-    pts_aprobados = []
-    pts_fallidos  = []
-    error_critico = None
+    print(f"\n{'='*55}\n  SAESA | {datetime.now().strftime('%d/%m/%Y %H:%M')}\n{'='*55}")
+    pts_aprobados, pts_fallidos, error_critico = [], [], None
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
-            args=[
-                "--ignore-certificate-errors",
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-dev-shm-usage",
-            ]
+            args=["--ignore-certificate-errors", "--no-sandbox",
+                  "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
         )
-        context = await browser.new_context(
-            ignore_https_errors=True,
-            viewport={"width": 1400, "height": 900}
-        )
-        page = await context.new_page()
-
+        page = await (await browser.new_context(
+            ignore_https_errors=True, viewport={"width": 1400, "height": 900}
+        )).new_page()
         try:
             await hacer_login(page)
             frame = await navegar_a_permisos(page)
             await aplicar_filtro(page, frame)
             pts_aprobados, pts_fallidos = await aprobar_pts(page, frame)
-
         except Exception as e:
             error_critico = str(e)
             print(f"\n✗ ERROR CRÍTICO: {e}")
             await screenshot(page, "error_critico")
-
         finally:
             await browser.close()
 
-    print(f"\n{'─'*60}")
-    print(f"  Resultado: {len(pts_aprobados)} aprobados | {len(pts_fallidos)} errores")
-    print(f"{'─'*60}")
-
+    print(f"\n  {len(pts_aprobados)} aprobados | {len(pts_fallidos)} errores")
     enviar_reporte(pts_aprobados, pts_fallidos, error_critico)
-    print("\n✓ Proceso finalizado.\n")
+    print("✓ Fin.\n")
 
 
 if __name__ == "__main__":
