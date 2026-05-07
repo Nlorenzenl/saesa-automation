@@ -1,0 +1,55 @@
+name: "SAESA – Autorización Diaria PT's"
+
+on:
+  schedule:
+    # 08:00 hora Chile continental (UTC-3 verano / UTC-4 invierno)
+    # Usamos UTC-3 (horario de verano, Oct-Mar) → 11:00 UTC
+    # Usamos UTC-4 (horario de invierno, Mar-Oct) → 12:00 UTC
+    # *** Ajusta el horario según la época del año ***
+    - cron: '0 11 * * 1-5'   # 08:00 Chile verano  (Lun–Vie)
+    # - cron: '0 12 * * 1-5' # 08:00 Chile invierno (Lun–Vie) – descomenta si aplica
+
+  # Ejecución manual desde GitHub → Actions → "Run workflow"
+  workflow_dispatch:
+
+jobs:
+  autorizar-pts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: "📥 Clonar repositorio"
+        uses: actions/checkout@v4
+
+      - name: "🐍 Configurar Python 3.11"
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: "📦 Instalar dependencias"
+        run: |
+          pip install playwright
+
+      - name: "🌐 Instalar Chromium"
+        run: |
+          playwright install chromium
+          playwright install-deps chromium
+
+      - name: "🤖 Ejecutar automatización SAESA"
+        env:
+          SAESA_USER:     ${{ secrets.SAESA_USER }}
+          SAESA_PASS:     ${{ secrets.SAESA_PASS }}
+          GMAIL_USER:     ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASS: ${{ secrets.GMAIL_APP_PASS }}
+          EMAIL_DEST:     ${{ secrets.EMAIL_DEST }}
+        run: |
+          python automatizacion_saesa.py
+
+      - name: "📸 Subir capturas de diagnóstico"
+        if: always()   # subir siempre (éxito o error)
+        uses: actions/upload-artifact@v4
+        with:
+          name: "capturas-${{ github.run_id }}"
+          path: capturas/
+          retention-days: 7
+          if-no-files-found: ignore
