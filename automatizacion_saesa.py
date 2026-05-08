@@ -104,27 +104,26 @@ JS_CHECK_BTN_APROBAR = """
 
 JS_CLICK_BTN_APROBAR = """
 () => {
-    var candidatos = Array.from(document.querySelectorAll("a,button,td,span"));
-    for (var i = 0; i < candidatos.length; i++) {
-        var el = candidatos[i];
-        if (!el.offsetParent) continue;
+    const candidatos = Array.from(
+        document.querySelectorAll("button.x-btn-text, .x-btn-text, button")
+    ).filter(el => el.offsetParent);
 
-        var txt = (el.innerText || el.textContent || "").trim();
+    for (const el of candidatos) {
+        const txt = (el.innerText || el.textContent || "").trim();
 
-        if (txt !== "Aprobar") continue;
-        if (el.classList.contains("x-item-disabled")) continue;
-        if (el.closest && el.closest(".x-item-disabled")) continue;
+        if (txt === "Aprobar") {
+            el.click();
 
-        el.click();
-
-        return {
-            clicked: true,
-            tag: el.tagName,
-            cls: String(el.className).substring(0, 60)
-        };
+            return {
+                clicked: true,
+                tag: el.tagName,
+                cls: String(el.className || ""),
+                text: txt
+            };
+        }
     }
 
-    return {clicked: false};
+    return {clicked: false, msg: "No encontré botón real Aprobar"};
 }
 """
 
@@ -686,7 +685,6 @@ async def aprobar_pts(page, frame):
                     "area": area_pt or "Sin área detectada",
                     "motivo": f"Estado no corresponde: {estado_pt or 'Sin estado detectado'}"
                 })
-
                 print(f"    [OMITIR ESTADO] {id_pt} | {estado_pt}")
                 continue
 
@@ -696,16 +694,13 @@ async def aprobar_pts(page, frame):
                     "area": area_pt,
                     "estado": estado_pt
                 })
-
                 print(f"    [APROBAR] {id_pt} | {area_pt} | {estado_pt}")
-
             else:
                 pts_omitidos.append({
                     "id": id_pt,
                     "area": area_pt or "Sin área detectada",
                     "motivo": "Área no Metropolitana"
                 })
-
                 print(f"    [OMITIR AREA] {id_pt} | {area_pt}")
 
         for pt in pts_esta_pagina:
@@ -718,14 +713,12 @@ async def aprobar_pts(page, frame):
             try:
                 if DRY_RUN:
                     print(f"    [DRY RUN] {pt['id']} NO fue aprobado realmente")
-
                     pts_aprobados.append({
                         "id": pt["id"],
                         "area": pt["area"],
                         "estado": pt["estado"],
                         "modo": "SIMULADO"
                     })
-
                     continue
 
                 sel = await seleccionar_fila_pt(page, frame, pt["id"])
@@ -768,14 +761,31 @@ async def aprobar_pts(page, frame):
                 print(f"    click Aprobar: {click_r}")
 
                 if not click_r.get("clicked"):
-                    pts_fallidos.append(f"{pt['id']} - click Aprobar no ejecutado")
-                    await screenshot(page, f"err_click_aprobar_{pt['id']}")
-                    continue
+                    print("    Retry Aprobar con locator real")
+
+                    aprobar_btn = frame.locator(
+                        "button.x-btn-text",
+                        has_text="Aprobar"
+                    ).first
+
+                    await aprobar_btn.click(
+                        timeout=5000,
+                        force=True
+                    )
+
+                    click_r = {
+                        "clicked": True,
+                        "via": "locator real"
+                    }
+
+                    print(f"    click Aprobar retry: {click_r}")
+
+                await page.wait_for_timeout(2000)
 
                 popup = {"found": False}
 
                 for intento in range(14):
-                    await page.wait_for_timeout(500)
+                    await page.wait_for_timeout(700)
 
                     popup = await frame.evaluate(JS_DETECT_POPUP)
 
@@ -786,7 +796,10 @@ async def aprobar_pts(page, frame):
                 await screenshot(page, f"popup_{pt['id']}")
 
                 if not popup.get("found"):
-                    pts_fallidos.append(f"{pt['id']} - popup Aprobar no apareció")
+                    pts_fallidos.append(
+                        f"{pt['id']} - popup Aprobar no apareció"
+                    )
+                    print("    ERROR: popup Aprobar no apareció")
                     continue
 
                 aceptar = await frame.evaluate(JS_CLICK_ACEPTAR)
@@ -823,11 +836,8 @@ async def aprobar_pts(page, frame):
 
             except Exception as e:
                 msg = str(e)[:250]
-
                 pts_fallidos.append(f"{pt['id']} - {msg}")
-
                 print(f"    EXCEPCIÓN: {msg}")
-
                 await screenshot(page, f"exc_{pt['id']}")
 
         if len(pts_aprobados) >= MAX_APROBACIONES:
@@ -844,9 +854,7 @@ async def aprobar_pts(page, frame):
             await page.wait_for_timeout(4000)
 
     await screenshot(page, "final")
-
     return pts_aprobados, pts_fallidos, pts_omitidos
-
 
 # =============================================================================
 # CORREO
@@ -1050,3 +1058,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+    
