@@ -3,7 +3,7 @@ name: SAESA Diario
 on:
   schedule:
     # Lunes a viernes 08:00 AM Chile aprox. UTC-4
-    - cron: "0 12 * * 1-5"
+    - cron: "55 4 * * *"
 
   workflow_dispatch:
 
@@ -35,7 +35,7 @@ jobs:
           GMAIL_APP_PASS: ${{ secrets.GMAIL_APP_PASS }}
           EMAIL_DEST: ${{ secrets.EMAIL_DEST }}
           DRY_RUN: "false"
-          MAX_APROBACIONES: "50"
+          MAX_APROBACIONES: "1"
 
       - name: Subir capturas si falla
         uses: actions/upload-artifact@v4
