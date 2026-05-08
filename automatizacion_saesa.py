@@ -337,208 +337,165 @@ async def navegar_a_permisos(page):
 
 # ─── FILTRO PCCT ──────────────────────────────────────────────────────────────
 
-async def aplicar_filtro_pcct(page, frame):
+async def aplicar_filtro_pcct(frame):
     print("\\n[3] FILTRO")
 
-    await frame.click('text="Filtro"')
-    await page.wait_for_timeout(2000)
-    await screenshot(page, "filtro_01_abierto")
+    # abrir filtro
+    await frame.click('text=Filtro')
+    await asyncio.sleep(2)
 
-    # Abrir combo EXACTO de Estado usando la fila del label "Estado:"
-    r_trigger = await frame.evaluate("""
+    await frame.screenshot(path=f"capturas/filtro_01_abierto_{ts()}.png")
+
+    # abrir combo ESTADO
+    r_estado = await frame.evaluate("""
     () => {
-        const win = Array.from(document.querySelectorAll(".x-window"))
-            .filter(w => w.offsetParent && (w.innerText || "").includes("Filtros"))[0];
 
-        if (!win) return { ok:false, msg:"No encontré ventana Filtros" };
+        function texto(el){
+            return (el.innerText || el.textContent || "").trim();
+        }
 
-        const labels = Array.from(win.querySelectorAll("label,td,div,span,b"))
-            .filter(el => el.offsetParent);
+        const labels = Array.from(document.querySelectorAll("*"));
 
         let estadoLabel = null;
 
         for (const el of labels) {
-            const txt = (el.innerText || "").trim();
-            if (txt === "Estado:") {
+            const t = texto(el);
+
+            if (t === "Estado:") {
                 estadoLabel = el;
                 break;
             }
         }
 
-        if (!estadoLabel) return { ok:false, msg:"No encontré label Estado:" };
-
-        const lr = estadoLabel.getBoundingClientRect();
-        const wr = win.getBoundingClientRect();
-
-        const y = lr.y + lr.height / 2;
-
-        // El combo Estado está a la derecha del label.
-        // Se hace clic cerca del borde derecho del input Estado.
-        const x = wr.right - 22;
-
-        const el = document.elementFromPoint(x, y);
-
-        if (!el) {
-            return { ok:false, msg:"elementFromPoint no encontró elemento", x:Math.round(x), y:Math.round(y) };
+        if (!estadoLabel) {
+            return {
+                ok:false,
+                msg:"label Estado no encontrado"
+            };
         }
 
-        el.click();
+        const y = estadoLabel.getBoundingClientRect().top;
+
+        const triggers = Array.from(
+            document.querySelectorAll(".x-form-trigger")
+        ).filter(el => el.offsetParent);
+
+        let mejor = null;
+        let mejorDiff = 999999;
+
+        for (const t of triggers) {
+
+            const r = t.getBoundingClientRect();
+            const diff = Math.abs(r.top - y);
+
+            if (diff < mejorDiff) {
+                mejor = t;
+                mejorDiff = diff;
+            }
+        }
+
+        if (!mejor) {
+            return {
+                ok:false,
+                msg:"trigger Estado no encontrado"
+            };
+        }
+
+        mejor.click();
+
+        const rr = mejor.getBoundingClientRect();
 
         return {
             ok:true,
             metodo:"click directo en fila Estado",
-            x:Math.round(x),
-            y:Math.round(y),
-            labelY:Math.round(lr.y),
-            clickedTag:el.tagName,
-            clickedClass:String(el.className || "")
+            x:rr.left,
+            y:rr.top,
+            labelY:y,
+            clickedTag:mejor.tagName,
+            clickedClass:mejor.className
         };
     }
     """)
 
-    print(f"  trigger Estado: {r_trigger}")
-    await page.wait_for_timeout(1500)
-    await screenshot(page, "filtro_02_dropdown_estado")
+    print(f"  trigger Estado: {r_estado}")
 
-    if not r_trigger.get("ok"):
-        raise RuntimeError(f"No se pudo abrir combo Estado: {r_trigger}")
+    if not r_estado.get("ok"):
+        raise Exception(f"No se pudo abrir combo Estado: {r_estado}")
 
-    # Seleccionar PCCT exacto
+    await asyncio.sleep(1.5)
+
+    await frame.screenshot(path=f"capturas/filtro_02_dropdown_estado_{ts()}.png")
+
+    # seleccionar REVISION Y AUTORIZACION PCCT
     r_pcct = await frame.evaluate("""
     () => {
+
         const objetivo = "Revisión y Autorización PCCT";
 
-        const items = Array.from(document.querySelectorAll(".x-combo-list-item"))
-            .filter(el => el.offsetParent);
+        function limpiar(txt) {
+            return (txt || "")
+                .replace(/[│├└─ \\u2007]/g, "")
+                .replace(/\\s+/g, " ")
+                .trim();
+        }
 
-        const disponibles = items.slice(0, 40).map(el => (el.innerText || "").trim());
+        const items = Array.from(
+            document.querySelectorAll(".x-combo-list-item")
+        ).filter(el => el.offsetParent);
+
+        const disponibles = items.map(el =>
+            limpiar(el.innerText || "")
+        );
 
         for (const item of items) {
-            const txt = (item.innerText || "").trim();
+
+            const raw = (item.innerText || "").trim();
+            const txt = limpiar(raw);
 
             if (txt === objetivo) {
-                item.scrollIntoView({block:"center"});
+
+                item.scrollIntoView({
+                    block:"center"
+                });
+
                 item.click();
-                return {ok:true, text:txt, disponibles};
+
+                return {
+                    ok:true,
+                    raw:raw,
+                    text:txt,
+                    disponibles:disponibles
+                };
             }
         }
 
-        return {ok:false, disponibles};
+        return {
+            ok:false,
+            disponibles:disponibles
+        };
     }
     """)
 
     print(f"  selección PCCT: {r_pcct}")
-    await page.wait_for_timeout(700)
-    await screenshot(page, "filtro_03_pcct_seleccionado")
+
+    await frame.screenshot(path=f"capturas/filtro_03_pcct_seleccionado_{ts()}.png")
 
     if not r_pcct.get("ok"):
-        raise RuntimeError(f"No se pudo seleccionar Estado PCCT. Opciones visibles: {r_pcct}")
+        raise Exception(
+            f"No se pudo seleccionar Estado PCCT. "
+            f"Opciones visibles: {r_pcct}"
+        )
 
-    # Validar que realmente quedó escrito en Estado:
-    validacion = await frame.evaluate("""
-    () => {
-        const win = Array.from(document.querySelectorAll(".x-window"))
-            .filter(w => w.offsetParent && (w.innerText || "").includes("Filtros"))[0];
+    # aplicar filtro
+    await frame.click('text=Aplicar')
 
-        if (!win) return {ok:false, msg:"No encontré ventana Filtros"};
+    print("  -> filtro aplicado")
 
-        const labels = Array.from(win.querySelectorAll("label,td,div,span,b"))
-            .filter(el => el.offsetParent);
+    await asyncio.sleep(4)
 
-        let estadoLabel = null;
+    await frame.screenshot(path=f"capturas/filtro_04_aplicado_{ts()}.png")
 
-        for (const el of labels) {
-            if ((el.innerText || "").trim() === "Estado:") {
-                estadoLabel = el;
-                break;
-            }
-        }
-
-        if (!estadoLabel) return {ok:false, msg:"No encontré label Estado"};
-
-        const lr = estadoLabel.getBoundingClientRect();
-
-        const inputs = Array.from(win.querySelectorAll("input"))
-            .filter(i => i.offsetParent);
-
-        let best = null;
-        let bestDy = 999999;
-
-        for (const inp of inputs) {
-            const r = inp.getBoundingClientRect();
-            const dy = Math.abs((r.y + r.height / 2) - (lr.y + lr.height / 2));
-
-            if (r.x > lr.x && dy < bestDy) {
-                best = inp;
-                bestDy = dy;
-            }
-        }
-
-        if (!best) return {ok:false, msg:"No encontré input Estado"};
-
-        return {
-            ok:(best.value || "").trim() === "Revisión y Autorización PCCT",
-            value:(best.value || "").trim(),
-            dy:Math.round(bestDy)
-        };
-    }
-    """)
-
-    print(f"  validación Estado: {validacion}")
-
-    if not validacion.get("ok"):
-        raise RuntimeError(f"Estado no quedó correctamente seleccionado: {validacion}")
-
-    # Aplicar
-    r_aplicar = await frame.evaluate("""
-    () => {
-        const win = Array.from(document.querySelectorAll(".x-window"))
-            .filter(w => w.offsetParent && (w.innerText || "").includes("Filtros"))[0];
-
-        if (!win) return {ok:false, msg:"No encontré ventana Filtros"};
-
-        const els = Array.from(win.querySelectorAll("a,button,span,td"))
-            .filter(el => el.offsetParent);
-
-        for (const el of els) {
-            const t = (el.innerText || el.textContent || "").trim();
-
-            if (t === "Aplicar") {
-                el.click();
-                return {ok:true};
-            }
-        }
-
-        return {ok:false, msg:"No encontré Aplicar"};
-    }
-    """)
-
-    print(f"  Aplicar: {r_aplicar}")
-
-    if not r_aplicar.get("ok"):
-        raise RuntimeError(f"No se pudo presionar Aplicar: {r_aplicar}")
-
-    await page.wait_for_load_state("networkidle", timeout=30_000)
-    await page.wait_for_timeout(3500)
-    await screenshot(page, "filtro_04_aplicado")
-
-    info = await frame.evaluate("""
-    () => {
-        const rows = document.querySelectorAll(".x-grid3-row");
-
-        const pagText = Array.from(document.querySelectorAll("*"))
-            .filter(e =>
-                e.children.length === 0 &&
-                e.offsetParent &&
-                (e.innerText || "").indexOf("Mostrando") >= 0
-            )
-            .map(e => e.innerText.trim());
-
-        return {filas_visibles: rows.length, paginador: pagText};
-    }
-    """)
-
-    print(f"  resultado filtro: {info}")
+    return True
 
 # ─── APROBAR PTs ──────────────────────────────────────────────────────────────
 
