@@ -587,26 +587,54 @@ async def aplicar_filtro_pcct(page, frame):
     print(f"  resultado filtro: {info}")
 
     return info
-    
+
 # =============================================================================
 # SELECCIÓN REAL DE FILA
 # =============================================================================
 
 async def seleccionar_fila_pt(page, frame, pt_id):
     try:
-        row = frame.locator(".x-grid3-row", has_text=pt_id).first()
+        row = frame.locator(
+            ".x-grid3-row",
+            has_text=pt_id
+        ).first
 
         await row.scroll_into_view_if_needed(timeout=5000)
         await page.wait_for_timeout(500)
 
-        await row.click(timeout=5000, force=True)
-        await page.wait_for_timeout(800)
+        await row.click(
+            timeout=5000,
+            force=True
+        )
 
-        celda = frame.locator(".x-grid3-cell-inner", has_text=pt_id).first()
-        await celda.click(timeout=5000, force=True)
-        await page.wait_for_timeout(800)
+        await page.wait_for_timeout(1200)
 
-        return {"found": True, "selected": True}
+        celda = frame.locator(
+            ".x-grid3-cell-inner",
+            has_text=pt_id
+        ).first
+
+        await celda.click(
+            timeout=5000,
+            force=True
+        )
+
+        await page.wait_for_timeout(1200)
+
+        # validar selección visual
+        selected = await row.evaluate("""
+        (el) => {
+            return (
+                el.classList.contains("x-grid3-row-selected") ||
+                el.className.includes("selected")
+            );
+        }
+        """)
+
+        return {
+            "found": True,
+            "selected": selected
+        }
 
     except Exception as e:
         return {
@@ -614,7 +642,6 @@ async def seleccionar_fila_pt(page, frame, pt_id):
             "selected": False,
             "error": str(e)
         }
-
 
 # =============================================================================
 # APROBAR PTS
