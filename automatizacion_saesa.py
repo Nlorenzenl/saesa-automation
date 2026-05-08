@@ -344,81 +344,98 @@ async def aplicar_filtro_pcct(page, frame):
     await page.wait_for_timeout(2000)
     await screenshot(page, "filtro_01_abierto")
 
+    # Click EXACTO en el trigger del campo Estado, buscando por coordenada Y del label "Estado:"
     r_trigger = await frame.evaluate("""
     () => {
-        var labels = Array.from(document.querySelectorAll("label,td,div,span,b"));
-        var estadoEl = null;
+        const labels = Array.from(document.querySelectorAll("label,td,div,span,b"))
+            .filter(el => el.offsetParent && (el.innerText || "").trim() === "Estado:");
 
-        for (var i = 0; i < labels.length; i++) {
-            var el = labels[i];
-            if (!el.offsetParent) continue;
-            if ((el.innerText || "").trim() === "Estado:") {
-                estadoEl = el;
-                break;
+        if (!labels.length) {
+            return {ok:false, msg:"label Estado no encontrado"};
+        }
+
+        const label = labels[0];
+        const lr = label.getBoundingClientRect();
+
+        const triggers = Array.from(document.querySelectorAll("img.x-form-arrow-trigger"))
+            .filter(t => t.offsetParent);
+
+        let best = null;
+        let bestScore = 999999;
+
+        for (const t of triggers) {
+            const r = t.getBoundingClientRect();
+
+            // Misma fila del label Estado:
+            const dy = Math.abs((r.y + r.height / 2) - (lr.y + lr.height / 2));
+
+            // Debe estar a la derecha del label:
+            const dx = r.x - lr.x;
+
+            if (dx < 50) continue;
+
+            const score = dy * 1000 + Math.abs(dx);
+
+            if (dy < 8 && score < bestScore) {
+                best = t;
+                bestScore = score;
             }
         }
 
-        if (!estadoEl) return {ok: false, msg: "label Estado no encontrado"};
-
-        var eRect = estadoEl.getBoundingClientRect();
-        var triggers = Array.from(document.querySelectorAll("img.x-form-arrow-trigger"));
-
-        var closest = null;
-        var minDist = 999999;
-
-        for (var j = 0; j < triggers.length; j++) {
-            var t = triggers[j];
-            if (!t.offsetParent) continue;
-
-            var r = t.getBoundingClientRect();
-            var dist = Math.abs(r.y - eRect.y) + Math.abs(r.x - eRect.x);
-
-            if (dist < minDist) {
-                minDist = dist;
-                closest = t;
-            }
+        if (!best) {
+            return {
+                ok:false,
+                msg:"trigger Estado no encontrado",
+                labelY: Math.round(lr.y),
+                triggers: triggers.map(t => {
+                    const r = t.getBoundingClientRect();
+                    return {x:Math.round(r.x), y:Math.round(r.y)};
+                })
+            };
         }
 
-        if (!closest) return {ok: false, msg: "trigger Estado no encontrado"};
+        best.click();
 
-        closest.click();
+        const br = best.getBoundingClientRect();
 
-        var cr = closest.getBoundingClientRect();
-        return {ok: true, x: Math.round(cr.x), y: Math.round(cr.y), dist: Math.round(minDist)};
+        return {
+            ok:true,
+            x:Math.round(br.x),
+            y:Math.round(br.y),
+            labelY:Math.round(lr.y),
+            score:Math.round(bestScore)
+        };
     }
     """)
 
     print(f"  trigger Estado: {r_trigger}")
     await page.wait_for_timeout(1500)
-    await screenshot(page, "filtro_02_dropdown")
+    await screenshot(page, "filtro_02_dropdown_estado")
 
+    if not r_trigger.get("ok"):
+        raise RuntimeError(f"No se pudo abrir combo Estado: {r_trigger}")
+
+    # Seleccionar EXACTAMENTE Revisión y Autorización PCCT
     r_pcct = await frame.evaluate("""
     () => {
-        var objetivo = "Revisión y Autorización PCCT";
+        const objetivo = "Revisión y Autorización PCCT";
 
-        var items = Array.from(document.querySelectorAll(".x-combo-list-item"));
-        for (var i = 0; i < items.length; i++) {
-            var t = (items[i].innerText || "").trim();
-            if (t === objetivo) {
-                items[i].click();
-                return {ok: true, exact: true, text: t};
-            }
-        }
+        const items = Array.from(document.querySelectorAll(".x-combo-list-item"))
+            .filter(el => el.offsetParent);
 
-        var all = Array.from(document.querySelectorAll("*"));
-        for (var j = 0; j < all.length; j++) {
-            var el = all[j];
-            if (!el.offsetParent || el.children.length > 0) continue;
+        const textos = items.map(el => (el.innerText || "").trim());
 
-            var txt = (el.innerText || "").trim();
+        for (const item of items) {
+            const txt = (item.innerText || "").trim();
 
             if (txt === objetivo) {
-                el.click();
-                return {ok: true, fallback_exact: true, text: txt};
+                item.scrollIntoView({block:"center"});
+                item.click();
+                return {ok:true, text:txt, disponibles:textos};
             }
         }
 
-        return {ok: false};
+        return {ok:false, disponibles:textos};
     }
     """)
 
@@ -427,24 +444,65 @@ async def aplicar_filtro_pcct(page, frame):
     await screenshot(page, "filtro_03_pcct_seleccionado")
 
     if not r_pcct.get("ok"):
-        raise RuntimeError("No se pudo seleccionar Estado = Revisión y Autorización PCCT")
+        raise RuntimeError(f"No se pudo seleccionar Estado PCCT. Opciones visibles: {r_pcct}")
 
-    r_aplicar = await frame.evaluate("""
+    # Validar que el input Estado quedó con PCCT
+    validacion = await frame.evaluate("""
     () => {
-        var els = Array.from(document.querySelectorAll("a,button,span,td"));
-        for (var i = 0; i < els.length; i++) {
-            var el = els[i];
-            if (!el.offsetParent) continue;
+        const labels = Array.from(document.querySelectorAll("label,td,div,span,b"))
+            .filter(el => el.offsetParent && (el.innerText || "").trim() === "Estado:");
 
-            var t = (el.innerText || el.textContent || "").trim();
+        if (!labels.length) return {ok:false, msg:"label Estado no encontrado"};
 
-            if (t === "Aplicar") {
-                el.click();
-                return {ok: true};
+        const lr = labels[0].getBoundingClientRect();
+
+        const inputs = Array.from(document.querySelectorAll("input.x-form-text, input"))
+            .filter(i => i.offsetParent);
+
+        let best = null;
+        let bestDy = 999999;
+
+        for (const inp of inputs) {
+            const r = inp.getBoundingClientRect();
+            const dy = Math.abs((r.y + r.height / 2) - (lr.y + lr.height / 2));
+
+            if (r.x > lr.x && dy < bestDy) {
+                best = inp;
+                bestDy = dy;
             }
         }
 
-        return {ok: false};
+        if (!best) return {ok:false, msg:"input Estado no encontrado"};
+
+        return {
+            ok: (best.value || "").trim() === "Revisión y Autorización PCCT",
+            value: (best.value || "").trim(),
+            dy: Math.round(bestDy)
+        };
+    }
+    """)
+
+    print(f"  validación Estado: {validacion}")
+
+    if not validacion.get("ok"):
+        raise RuntimeError(f"Estado no quedó seleccionado correctamente: {validacion}")
+
+    # Click en Aplicar
+    r_aplicar = await frame.evaluate("""
+    () => {
+        const els = Array.from(document.querySelectorAll("a,button,span,td"))
+            .filter(el => el.offsetParent);
+
+        for (const el of els) {
+            const t = (el.innerText || el.textContent || "").trim();
+
+            if (t === "Aplicar") {
+                el.click();
+                return {ok:true};
+            }
+        }
+
+        return {ok:false};
     }
     """)
 
@@ -459,23 +517,22 @@ async def aplicar_filtro_pcct(page, frame):
 
     info = await frame.evaluate("""
     () => {
-        var rows = document.querySelectorAll(".x-grid3-row");
+        const rows = document.querySelectorAll(".x-grid3-row");
 
-        var pagText = Array.from(document.querySelectorAll("*"))
-            .filter(function(e) {
-                return e.children.length === 0 &&
-                       e.offsetParent &&
-                       (e.innerText || "").indexOf("Mostrando") >= 0;
-            })
-            .map(function(e) { return e.innerText.trim(); });
+        const pagText = Array.from(document.querySelectorAll("*"))
+            .filter(e =>
+                e.children.length === 0 &&
+                e.offsetParent &&
+                (e.innerText || "").indexOf("Mostrando") >= 0
+            )
+            .map(e => e.innerText.trim());
 
         return {filas_visibles: rows.length, paginador: pagText};
     }
     """)
 
     print(f"  resultado filtro: {info}")
-
-
+    
 # ─── APROBAR PTs ──────────────────────────────────────────────────────────────
 
 async def aprobar_pts(page, frame):
