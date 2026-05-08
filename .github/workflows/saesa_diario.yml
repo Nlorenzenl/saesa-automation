@@ -3,7 +3,7 @@ name: SAESA Diario
 on:
   schedule:
     # Lunes a viernes 08:00 AM Chile aprox. UTC-4
-    - cron: "10 5 * * *"
+    - cron: "20 5 * * *"
 
   workflow_dispatch:
 
