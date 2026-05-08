@@ -1,7 +1,6 @@
 """
 Automatización SAESA – Autorización diaria de PT's
-Filtro: Estado = PCCT (usando el arrow trigger correcto)
-Aprobación: SOLO PT's cuya columna Área contenga "Metropolitana"
+Solución definitiva: localizar el trigger de Estado por el texto del label
 """
 
 import asyncio
@@ -83,108 +82,102 @@ async def navegar_a_permisos(page):
 
 
 async def aplicar_filtro_estado(page, frame):
-    """
-    Aplica filtro Estado = PCCT.
-    El popup del filtro tiene estas filas (de arriba a abajo):
-      En bandeja de trabajo (checkbox)
-      Ids de permisos de trabajo (texto)
-      Entidad de contexto de origen (combo, arrow en y≈261)
-      Identificador de área (texto)
-      Inicio disponibilidad desde/hasta (fechas)
-      Disponibilidad horaria
-      Ingresada desde/hasta
-      Alimentador
-      Elemento de maniobra
-      Áreas (combo+list-trigger, arrow en y≈495)
-      Tipo de permiso de trabajo (combo, arrow en y≈521)  ← ESTE ES EL QUE SE CLICKEÓ MAL
-      Estado (combo, arrow en y≈547)                      ← ESTE ES EL CORRECTO
-      Creador (combo, arrow en y≈573)
-      Sector requirente (combo, arrow en y≈599)
-    """
     print("\n[3] FILTRO - Estado PCCT")
     await frame.click('text=Filtro')
     await page.wait_for_timeout(2500)
     await screenshot(page, "04_filtro_abierto")
 
-    # Diagnóstico: listar TODOS los arrow triggers con sus posiciones exactas
-    triggers_info = await frame.evaluate('''() => {
-        const triggers = Array.from(document.querySelectorAll("img.x-form-arrow-trigger"));
-        return triggers.filter(t => t.offsetParent).map(t => {
-            const r = t.getBoundingClientRect();
-            // Buscar el label asociado mirando el td anterior en la tabla
-            let label = "";
-            try {
-                const row = t.closest("tr");
-                if (row) {
-                    const firstTd = row.querySelector("td:first-child");
-                    label = firstTd ? firstTd.innerText.trim() : "";
-                }
-            } catch(e) {}
-            return {x: Math.round(r.x), y: Math.round(r.y), label};
-        });
-    }''')
-    print(f"  → Arrow triggers con labels:")
-    for i, t in enumerate(triggers_info):
-        print(f"    [{i}] y={t['y']} label='{t['label']}'")
+    # Estrategia: buscar el label "Estado:" y desde ahí encontrar el trigger
+    trigger_info = await frame.evaluate('''() => {
+        const log = [];
 
-    # Buscar el arrow trigger cuyo label contenga "Estado"
-    estado_trigger = None
-    for t in triggers_info:
-        if 'Estado' in t['label'] or 'estado' in t['label']:
-            estado_trigger = t
-            print(f"  → Trigger Estado encontrado: y={t['y']}")
-            break
+        // Buscar TODOS los elementos que contengan exactamente "Estado:" como label
+        const allEls = Array.from(document.querySelectorAll("label, td, div, span"));
+        for (const el of allEls) {
+            const txt = (el.innerText || el.textContent || "").trim();
+            if (txt !== "Estado:" && txt !== "Estado") continue;
+            if (!el.offsetParent) continue;
 
-    # Si no encontramos por label, usar la posición conocida (y≈547 según el layout)
-    if not estado_trigger:
-        # Buscar el que esté entre y=540 y y=560
-        for t in triggers_info:
-            if 540 <= t['y'] <= 560:
-                estado_trigger = t
-                print(f"  → Trigger Estado por posición: y={t['y']}")
-                break
+            const rect = el.getBoundingClientRect();
+            log.push(`Label Estado en y=${Math.round(rect.y)}`);
 
-    if not estado_trigger and triggers_info:
-        # Fallback: el penúltimo visible (antes de Creador y Sector requirente)
-        visible = [t for t in triggers_info if t['y'] > 400]
-        if len(visible) >= 3:
-            estado_trigger = visible[-3]  # antepenúltimo
-            print(f"  → Trigger Estado por índice: y={estado_trigger['y']}")
+            // Buscar el trigger en la misma fila (tr) o elemento padre cercano
+            const row = el.closest("tr") || el.parentElement;
+            if (!row) continue;
 
-    if estado_trigger:
-        print(f"  → Click en trigger Estado ({estado_trigger['x']}, {estado_trigger['y']})")
-        # Usar frame.evaluate para hacer clic directamente en el elemento
-        await frame.evaluate(f'''() => {{
-            const triggers = Array.from(document.querySelectorAll("img.x-form-arrow-trigger"));
-            const target = triggers.find(t => {{
+            // Buscar TODOS los triggers en esa fila
+            const triggers = row.querySelectorAll("img[class*='trigger'], img[class*='arrow']");
+            const allInputs = row.querySelectorAll("input");
+
+            triggers.forEach(t => {
                 const r = t.getBoundingClientRect();
-                return Math.round(r.y) === {estado_trigger['y']} && t.offsetParent;
-            }});
-            if (target) target.click();
-        }}''')
-        await page.wait_for_timeout(2000)
-        await screenshot(page, "04b_dropdown_estado")
+                log.push(`  trigger en (${Math.round(r.x)}, ${Math.round(r.y)}) cls=${t.className}`);
+            });
 
-        # Seleccionar PCCT en el dropdown
-        pcct_ok = await frame.evaluate(f'''() => {{
-            const all = Array.from(document.querySelectorAll("div,li,td,span"));
-            for (const el of all) {{
-                if (!el.offsetParent) continue;
-                const t = (el.innerText || "").trim();
-                if (t.includes("PCCT") && t.includes("Revisión") && t.length < 80) {{
-                    el.click();
-                    return {{ok: true, text: t}};
-                }}
+            if (triggers.length > 0) {
+                const t = triggers[triggers.length - 1]; // último trigger de la fila
+                t.click();
+                const r = t.getBoundingClientRect();
+                return {ok: true, x: Math.round(r.x), y: Math.round(r.y), log};
+            }
+
+            // Si no hay triggers en el tr, buscar el input text+trigger cerca
+            allInputs.forEach(i => {
+                const r = i.getBoundingClientRect();
+                log.push(`  input en (${Math.round(r.x)}, ${Math.round(r.y)}) type=${i.type}`);
+            });
+        }
+
+        // Fallback: inspeccionar todos los triggers con su posición Y relativa a labels
+        const labels = Array.from(document.querySelectorAll("label, td.x-form-item-label"));
+        const triggers = Array.from(document.querySelectorAll("img[class*='trigger']"));
+
+        const labeled = [];
+        for (const lbl of labels) {
+            const txt = (lbl.innerText || "").trim();
+            if (!txt || !lbl.offsetParent) continue;
+            const lr = lbl.getBoundingClientRect();
+
+            // Buscar el trigger más cercano horizontalmente en la misma y
+            for (const t of triggers) {
+                if (!t.offsetParent) continue;
+                const tr = t.getBoundingClientRect();
+                if (Math.abs(tr.y - lr.y) < 15) {
+                    labeled.push({label: txt, tx: Math.round(tr.x), ty: Math.round(tr.y), cls: t.className});
+                }
+            }
+        }
+
+        log.push("Labeled triggers: " + JSON.stringify(labeled));
+        return {ok: false, log};
+    }''')
+    print(f"  → Búsqueda trigger Estado: {trigger_info}")
+    await page.wait_for_timeout(1500)
+    await screenshot(page, "04b_tras_click_estado")
+
+    # Seleccionar PCCT en el dropdown
+    pcct_ok = await frame.evaluate(f'''() => {{
+        const all = Array.from(document.querySelectorAll("div,li,td,span"));
+        for (const el of all) {{
+            if (!el.offsetParent) continue;
+            const t = (el.innerText || "").trim();
+            if (t === "{ESTADO_FILTRO}") {{ el.click(); return {{ok: true, text: t}}; }}
+        }}
+        // Búsqueda parcial
+        for (const el of all) {{
+            if (!el.offsetParent) continue;
+            const t = (el.innerText || "").trim();
+            if (t.includes("PCCT") && t.includes("Revisión") && t.length < 60) {{
+                el.click(); return {{ok: true, via: "parcial", text: t}};
             }}
-            return {{ok: false}};
-        }}''')
-        print(f"  → PCCT: {pcct_ok}")
-        await page.wait_for_timeout(500)
-        await screenshot(page, "04c_pcct_seleccionado")
-    else:
-        print("  ⚠️ No se encontró trigger de Estado")
+        }}
+        return {{ok: false}};
+    }}''')
+    print(f"  → PCCT: {pcct_ok}")
+    await page.wait_for_timeout(500)
+    await screenshot(page, "04c_pcct")
 
-    # Clic en Aplicar
+    # Aplicar
     await frame.evaluate('''() => {
         const btns = Array.from(document.querySelectorAll("button,a,span"));
         for (const btn of btns) {
@@ -199,99 +192,78 @@ async def aplicar_filtro_estado(page, frame):
     await page.wait_for_timeout(3000)
     await screenshot(page, "05_filtro_aplicado")
 
-    # Verificar cuántos registros quedaron
-    total = await frame.evaluate('''() => {
-        const el = document.querySelector('[class*="paging-info"], .x-paging-info, [id*="paging-info"]');
-        return el ? el.innerText : "no encontrado";
+    # Contar registros resultantes
+    count_info = await frame.evaluate('''() => {
+        // Contar filas de la tabla
+        const rows = document.querySelectorAll(".x-grid3-row");
+        // Buscar texto "Mostrando X - Y de Z"
+        const allText = Array.from(document.querySelectorAll("*")).filter(
+            el => el.children.length === 0 && el.offsetParent &&
+                  (el.innerText || "").includes("Mostrando")
+        );
+        const textos = allText.map(e => (e.innerText || "").trim());
+        return {filas: rows.length, textos};
     }''')
-    print(f"  → Total registros tras filtro: {total}")
+    print(f"  → Resultado filtro: {count_info}")
     print("  ✓ Filtro aplicado")
 
 
-async def leer_pts_pagina_actual(frame):
-    """Lee los PT's de la página actual. Retorna (metropolitana[], omitidos[])."""
-    pts_metro = []
-    pts_omit  = []
-
-    # ExtJS renderiza solo las filas visibles en el viewport
-    # La tabla real tiene class x-grid3-row
-    filas_info = await frame.evaluate('''() => {
-        const filas = Array.from(document.querySelectorAll(".x-grid3-row"));
-        return filas.map(f => {
-            const celdas = Array.from(f.querySelectorAll(".x-grid3-cell-inner"));
-            return celdas.map(c => c.innerText.trim());
-        }).filter(row => row.length > 0);
-    }''')
-
-    for row in filas_info:
-        if not row or not re.match(r'\d{4}-\d{5}', row[0] if row else ''):
-            continue
-        id_pt   = row[0]
-        # Columna 2 es Área (índice 2: Id, Fecha, Área, Estado, Tipo, Desc)
-        area_pt = row[2] if len(row) > 2 else ""
-        estado_pt = row[3] if len(row) > 3 else ""
-
-        # Solo procesar los que tienen estado PCCT
-        if "PCCT" not in estado_pt:
-            continue
-
-        if AREA_REQUERIDA.lower() in area_pt.lower():
-            pts_metro.append({"id": id_pt, "area": area_pt})
-            print(f"    ✅ {id_pt} | {area_pt[:40]} | {estado_pt[:30]}")
-        else:
-            pts_omit.append({"id": id_pt, "area": area_pt})
-            print(f"    ⏭️  {id_pt} | {area_pt[:40]} — omitido")
-
-    return pts_metro, pts_omit
-
-
 async def aprobar_pts(page, frame):
-    print("\n[4] APROBANDO PT's METROPOLITANA con estado PCCT")
+    print("\n[4] APROBANDO PT's")
     pts_aprobados = []
     pts_fallidos  = []
     pts_omitidos  = []
 
     # Obtener total de páginas
-    paginacion = await frame.evaluate('''() => {
-        const info = document.querySelector(".x-paging-info, [class*='paging-info']");
-        const total_el = document.querySelector("input.x-tbar-page-number");
-        const pages_el = document.querySelectorAll(".x-paging-info");
-        return {
-            info: info ? info.innerText : "",
-            currentPage: total_el ? total_el.value : "1"
-        };
-    }''')
-    print(f"  → Paginación: {paginacion}")
-
-    # Obtener número total de páginas del indicador "Página X de Y"
     total_paginas = await frame.evaluate('''() => {
-        // Buscar el texto "de X" en la barra de paginación
         const all = Array.from(document.querySelectorAll("*"));
         for (const el of all) {
             if (!el.offsetParent || el.children.length > 2) continue;
             const t = (el.innerText || "").trim();
-            if (t.match(/^de \d+$/)) return parseInt(t.replace("de ", ""));
+            if (/^de \d+$/.test(t)) return parseInt(t.replace("de ", ""));
         }
         return 1;
     }''')
     print(f"  → Total páginas: {total_paginas}")
 
-    # Leer SOLO la primera página para identificar PT's Metropolitana PCCT
-    # (el filtro PCCT + bandeja ya reduce bastante)
-    print(f"\n  → Leyendo PT's en las páginas disponibles...")
-
-    paginas_a_leer = min(total_paginas, 20)  # máximo 20 páginas para evitar timeout
+    paginas_a_leer = min(total_paginas, 5)  # Con filtro PCCT deben ser pocas páginas
 
     for pagina in range(1, paginas_a_leer + 1):
-        print(f"  → Página {pagina}/{paginas_a_leer}")
-        metro, omit = await leer_pts_pagina_actual(frame)
-        pts_omitidos.extend(omit)
+        print(f"\n  → Página {pagina}/{paginas_a_leer}")
 
-        # Aprobar los PT's metropolitana encontrados en ESTA página
-        for pt in metro:
+        # Leer filas de la página actual
+        filas_info = await frame.evaluate('''() => {
+            const filas = Array.from(document.querySelectorAll(".x-grid3-row"));
+            return filas.map(f => {
+                const celdas = Array.from(f.querySelectorAll(".x-grid3-cell-inner"));
+                return celdas.map(c => c.innerText.trim());
+            });
+        }''')
+
+        print(f"    Filas: {len(filas_info)}, primera: {filas_info[0] if filas_info else 'vacío'}")
+
+        pts_pagina = []
+        for row in filas_info:
+            if not row or not re.match(r'\d{4}-\d{5}', row[0] if row else ''):
+                continue
+            id_pt    = row[0]
+            area_pt  = row[2] if len(row) > 2 else ""
+            estado_pt = row[3] if len(row) > 3 else ""
+
+            if "PCCT" not in estado_pt:
+                continue
+
+            if AREA_REQUERIDA.lower() in area_pt.lower():
+                pts_pagina.append({"id": id_pt, "area": area_pt})
+                print(f"    ✅ {id_pt} | {area_pt[:35]}")
+            else:
+                pts_omitidos.append({"id": id_pt, "area": area_pt})
+                print(f"    ⏭️  {id_pt} | {area_pt[:35]}")
+
+        # Aprobar los PT's de esta página
+        for pt in pts_pagina:
             try:
-                print(f"\n  → Aprobando {pt['id']}...")
-                # Buscar la fila en la tabla actual
+                print(f"\n    → Aprobando {pt['id']}...")
                 encontrado = await frame.evaluate(f'''() => {{
                     const filas = Array.from(document.querySelectorAll(".x-grid3-row"));
                     for (const fila of filas) {{
@@ -305,17 +277,13 @@ async def aprobar_pts(page, frame):
                 }}''')
 
                 if not encontrado:
-                    pts_fallidos.append(f"{pt['id']} (fila no encontrada)")
+                    pts_fallidos.append(f"{pt['id']} (no encontrado)")
                     continue
 
                 await page.wait_for_timeout(800)
-
-                # Clic en Aprobar
                 await frame.click('a:has-text("Aprobar"), button:has-text("Aprobar")')
                 await page.wait_for_timeout(1500)
-                await screenshot(page, f"aprobar_{pt['id']}")
 
-                # Aceptar popup
                 aceptar = await frame.evaluate('''() => {
                     for (const btn of document.querySelectorAll("button,input[type='button']")) {
                         if (!btn.offsetParent) continue;
@@ -341,19 +309,18 @@ async def aprobar_pts(page, frame):
             except Exception as e:
                 msg = str(e)[:80]
                 pts_fallidos.append(f"{pt['id']}: {msg}")
-                print(f"    ✗ Error: {msg}")
+                print(f"    ✗ {msg}")
                 await screenshot(page, f"error_{pt['id']}")
 
-        # Ir a página siguiente si hay más
+        # Ir a siguiente página
         if pagina < paginas_a_leer:
-            siguiente_ok = await frame.evaluate('''() => {
-                // Botón siguiente: class x-tbar-page-next, no debe tener x-item-disabled
+            sig = await frame.evaluate('''() => {
                 const btn = document.querySelector(".x-tbar-page-next:not(.x-item-disabled)");
                 if (btn) { btn.click(); return true; }
                 return false;
             }''')
-            if not siguiente_ok:
-                print("  → No hay más páginas")
+            if not sig:
+                print("  → Fin de páginas")
                 break
             await page.wait_for_timeout(2000)
 
@@ -369,12 +336,10 @@ def enviar_reporte(pts_aprobados, pts_fallidos, pts_omitidos=None, error_critico
         f"<tr><td style='padding:4px 12px'>✅</td><td style='font-family:monospace;padding:4px 12px'>{pt}</td></tr>"
         for pt in pts_aprobados
     ) or "<tr><td colspan='2' style='padding:4px 12px;color:#888'>Ninguno</td></tr>"
-
     lista_err = "".join(
         f"<tr><td style='padding:4px 12px'>❌</td><td style='padding:4px 12px'>{pt}</td></tr>"
         for pt in pts_fallidos
     ) or "<tr><td colspan='2' style='padding:4px 12px;color:#888'>Sin errores</td></tr>"
-
     lista_omit = "".join(
         f"<tr><td style='padding:4px 12px'>⏭️</td><td style='padding:4px 12px;color:#888'>{pt['id']} — {pt['area'][:50]}</td></tr>"
         for pt in omitidos
@@ -392,13 +357,13 @@ def enviar_reporte(pts_aprobados, pts_fallidos, pts_omitidos=None, error_critico
       </div>
       <div style="border:1px solid #ddd;border-top:none;padding:20px;border-radius:0 0 8px 8px">
         <p><strong>Fecha:</strong> {fecha}</p>
-        <p><strong>Criterio:</strong> Estado = {ESTADO_FILTRO} + Área contiene "{AREA_REQUERIDA}"</p>
+        <p><strong>Criterio:</strong> Estado = {ESTADO_FILTRO} + Área "{AREA_REQUERIDA}"</p>
         {error_bloque}
-        <h3 style="color:#006600">✅ PT's Aprobados ({len(pts_aprobados)})</h3>
+        <h3 style="color:#006600">✅ Aprobados ({len(pts_aprobados)})</h3>
         <table style="border-collapse:collapse;width:100%">{lista_ok}</table>
-        <h3 style="color:#cc0000;margin-top:20px">❌ PT's con Error ({len(pts_fallidos)})</h3>
+        <h3 style="color:#cc0000;margin-top:20px">❌ Errores ({len(pts_fallidos)})</h3>
         <table style="border-collapse:collapse;width:100%">{lista_err}</table>
-        <h3 style="color:#888;margin-top:20px">⏭️ PT's Omitidos por área ({len(omitidos)})</h3>
+        <h3 style="color:#888;margin-top:20px">⏭️ Omitidos por área ({len(omitidos)})</h3>
         <table style="border-collapse:collapse;width:100%">{lista_omit}</table>
         <p style="color:#999;font-size:11px;margin-top:20px">Bot SAESA – GitHub Actions | Lun–Vie 08:00 Chile</p>
       </div></body></html>"""
@@ -406,7 +371,6 @@ def enviar_reporte(pts_aprobados, pts_fallidos, pts_omitidos=None, error_critico
     asunto = f"[SAESA] {datetime.now().strftime('%d/%m/%Y')} – {len(pts_aprobados)} aprobados"
     if error_critico:
         asunto = f"[SAESA] ⚠️ ERROR {datetime.now().strftime('%d/%m/%Y')}"
-
     msg = MIMEMultipart("alternative")
     msg["Subject"] = asunto
     msg["From"] = GMAIL_USER
