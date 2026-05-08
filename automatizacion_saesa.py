@@ -31,11 +31,11 @@ EMAIL_DEST = os.environ["EMAIL_DEST"]
 TIMEOUT = 30_000
 
 # Primero probar en True. Cuando esté validado, cambiar a False en GitHub Secret.
-DRY_RUN = os.environ.get("DRY_RUN", "true").lower() == "true"
+DRY_RUN = os.environ.get("DRY_RUN", "true").lower() == "False"
 
 ESTADO_EXACTO = "Revisión y Autorización PCCT"
 AREA_KEYWORDS = ["metropolitana"]
-MAX_APROBACIONES = int(os.environ.get("MAX_APROBACIONES", "50"))
+MAX_APROBACIONES = int(os.environ.get("MAX_APROBACIONES", "2"))
 
 # ─── JAVASCRIPT HELPERS ───────────────────────────────────────────────────────
 
