@@ -1,55 +1,46 @@
-name: "SAESA – Autorización Diaria PT's"
+name: SAESA Diario
 
 on:
   schedule:
-    # 08:00 hora Chile continental (UTC-3 verano / UTC-4 invierno)
-    # Usamos UTC-3 (horario de verano, Oct-Mar) → 11:00 UTC
-    # Usamos UTC-4 (horario de invierno, Mar-Oct) → 12:00 UTC
-    # *** Ajusta el horario según la época del año ***
-    - cron: '0 11 * * 1-5'   # 08:00 Chile verano  (Lun–Vie)
-    # - cron: '0 12 * * 1-5' # 08:00 Chile invierno (Lun–Vie) – descomenta si aplica
+    # Lunes a viernes 08:00 AM Chile aprox. UTC-4
+    - cron: "0 12 * * 1-5"
 
-  # Ejecución manual desde GitHub → Actions → "Run workflow"
   workflow_dispatch:
 
 jobs:
-  autorizar-pts:
+  run-saesa:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
 
     steps:
-      - name: "📥 Clonar repositorio"
+      - name: Descargar repo
         uses: actions/checkout@v4
 
-      - name: "🐍 Configurar Python 3.11"
+      - name: Configurar Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: "📦 Instalar dependencias"
+      - name: Instalar dependencias
         run: |
+          python -m pip install --upgrade pip
           pip install playwright
-
-      - name: "🌐 Instalar Chromium"
-        run: |
           playwright install chromium
-          playwright install-deps chromium
 
-      - name: "🤖 Ejecutar automatización SAESA"
+      - name: Ejecutar automatización SAESA
+        run: python automatizacion_saesa.py
         env:
-          SAESA_USER:     ${{ secrets.SAESA_USER }}
-          SAESA_PASS:     ${{ secrets.SAESA_PASS }}
-          GMAIL_USER:     ${{ secrets.GMAIL_USER }}
+          SAESA_USER: ${{ secrets.SAESA_USER }}
+          SAESA_PASS: ${{ secrets.SAESA_PASS }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASS: ${{ secrets.GMAIL_APP_PASS }}
-          EMAIL_DEST:     ${{ secrets.EMAIL_DEST }}
-        run: |
-          python automatizacion_saesa.py
+          EMAIL_DEST: ${{ secrets.EMAIL_DEST }}
+          DRY_RUN: "false"
+          MAX_APROBACIONES: "50"
 
-      - name: "📸 Subir capturas de diagnóstico"
-        if: always()   # subir siempre (éxito o error)
+      - name: Subir capturas si falla
         uses: actions/upload-artifact@v4
+        if: failure()
         with:
-          name: "capturas-${{ github.run_id }}"
+          name: capturas-error-saesa
           path: capturas/
-          retention-days: 7
           if-no-files-found: ignore
