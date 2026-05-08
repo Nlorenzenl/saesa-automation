@@ -294,7 +294,11 @@ async def aprobar_pts(page, frame):
                 print("    SKIP: " + id_pt + " | " + area_pt[:40])
 
         # Aprobar PT's de esta pagina
+        ya_aprobados = set(pts_aprobados)
         for pt in pts_pagina:
+            if pt["id"] in ya_aprobados:
+                print("    SKIP (ya aprobado): " + pt["id"])
+                continue
             try:
                 print("\n    Aprobando " + pt["id"] + "...")
 
@@ -307,15 +311,56 @@ async def aprobar_pts(page, frame):
                     continue
 
                 await page.wait_for_timeout(800)
-                await frame.click('a:has-text("Aprobar"), button:has-text("Aprobar")')
-                await page.wait_for_timeout(1500)
 
+                # Verificar que la fila quedó seleccionada (resaltada)
+                sel_check = await frame.evaluate(
+                    "() => { var sel = document.querySelector('.x-grid3-row-selected'); "
+                    "return sel ? sel.querySelector('.x-grid3-cell-inner').innerText.trim() : 'ninguna'; }"
+                )
+                print("    Fila seleccionada: " + str(sel_check))
+
+                # Clic en boton Aprobar de la barra
+                await frame.click('a:has-text("Aprobar"), button:has-text("Aprobar")')
+                await page.wait_for_timeout(2000)
+                await screenshot(page, "popup_" + pt["id"])
+
+                # Verificar si el popup aparecio buscando el boton Aceptar
+                popup_visible = await frame.evaluate(
+                    "() => { var btns = Array.from(document.querySelectorAll('button,input')); "
+                    "for (var i=0; i<btns.length; i++) { "
+                    "var b = btns[i]; if (!b.offsetParent) continue; "
+                    "var t = (b.innerText || b.value || '').trim(); "
+                    "if (t === 'Aceptar') return {found: true, x: Math.round(b.getBoundingClientRect().x), y: Math.round(b.getBoundingClientRect().y)}; "
+                    "} return {found: false}; }"
+                )
+                print("    Popup Aceptar: " + str(popup_visible))
+
+                if not popup_visible.get("found"):
+                    pts_fallidos.append(pt["id"] + " (popup no aparecio)")
+                    print("    ERROR: popup no aparecio - puede que la fila no estaba seleccionada")
+                    await screenshot(page, "no_popup_" + pt["id"])
+                    continue
+
+                # Clic en Aceptar
                 aceptar = await frame.evaluate(JS_CLICK_APROBAR_POPUP)
                 if not aceptar:
                     await page.evaluate(JS_CLICK_APROBAR_POPUP)
+                await page.wait_for_timeout(500)
+                await screenshot(page, "post_aceptar_" + pt["id"])
 
                 await page.wait_for_load_state("networkidle", timeout=15_000)
-                await page.wait_for_timeout(1500)
+                await page.wait_for_timeout(2000)
+
+                # Verificar que el PT ya no aparece en la lista (fue aprobado)
+                aun_existe = await frame.evaluate(
+                    "() => { var celdas = Array.from(document.querySelectorAll('.x-grid3-cell-inner')); "
+                    "return celdas.some(function(c) { return c.innerText.trim() === '" + pt["id"] + "'; }); }"
+                )
+                if aun_existe:
+                    print("    ADVERTENCIA: PT aun visible en lista tras aprobar")
+                else:
+                    print("    Confirmado: PT ya no aparece en lista")
+
                 pts_aprobados.append(pt["id"])
                 print("    APROBADO: " + pt["id"])
 
