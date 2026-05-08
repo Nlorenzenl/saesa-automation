@@ -2,9 +2,10 @@ name: SAESA Diario
 
 on:
   schedule:
-    # Lunes a viernes 08:00 AM Chile aprox. UTC-4
-     - cron: "0 12 * * 1-5"
-
+    # Lunes a viernes 08:00 AM Chile (UTC-4 invierno / UTC-3 verano)
+    # 0 12 = 08:00 en invierno | 0 11 = 08:00 en verano
+    # Usamos 11:00 UTC para cubrir horario de verano
+    - cron: "0 11 * * 1-5"
   workflow_dispatch:
 
 jobs:
@@ -25,6 +26,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install playwright
           playwright install chromium
+          playwright install-deps chromium
 
       - name: Ejecutar automatización SAESA
         run: python automatizacion_saesa.py
@@ -37,10 +39,10 @@ jobs:
           DRY_RUN: "false"
           MAX_APROBACIONES: "50"
 
-      - name: Subir capturas si falla
+      - name: Subir capturas
         uses: actions/upload-artifact@v4
-        if: failure()
+        if: always()          # siempre, no solo en fallo
         with:
-          name: capturas-error-saesa
+          name: capturas-saesa-${{ github.run_id }}
           path: capturas/
-          if-no-files-found: ignore
+          if-no-files-found: ignore    # no falla si no hay capturas
