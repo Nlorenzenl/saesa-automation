@@ -647,7 +647,7 @@ async def seleccionar_fila_pt(page, frame, pt_id):
 # =============================================================================
 
 async def aprobar_pts(page, frame):
-    print("\\n[4] APROBANDO PTs")
+    print("\n[4] APROBANDO PTs")
     print(f"  DRY_RUN: {DRY_RUN}")
     print(f"  MAX_APROBACIONES: {MAX_APROBACIONES}")
 
@@ -661,7 +661,7 @@ async def aprobar_pts(page, frame):
     print(f"  Total páginas: {total_paginas}")
 
     for pagina in range(1, paginas + 1):
-        print(f"\\n  ── Página {pagina}/{paginas} ──")
+        print(f"\n  ── Página {pagina}/{paginas} ──")
 
         await page.wait_for_timeout(1500)
 
@@ -685,6 +685,7 @@ async def aprobar_pts(page, frame):
                     "area": area_pt or "Sin área detectada",
                     "motivo": f"Estado no corresponde: {estado_pt or 'Sin estado detectado'}"
                 })
+
                 print(f"    [OMITIR ESTADO] {id_pt} | {estado_pt}")
                 continue
 
@@ -694,73 +695,130 @@ async def aprobar_pts(page, frame):
                     "area": area_pt,
                     "estado": estado_pt
                 })
+
                 print(f"    [APROBAR] {id_pt} | {area_pt} | {estado_pt}")
+
             else:
                 pts_omitidos.append({
                     "id": id_pt,
                     "area": area_pt or "Sin área detectada",
                     "motivo": "Área no Metropolitana"
                 })
+
                 print(f"    [OMITIR AREA] {id_pt} | {area_pt}")
 
         for pt in pts_esta_pagina:
+
             if len(pts_aprobados) >= MAX_APROBACIONES:
                 print("    LÍMITE DE SEGURIDAD ALCANZADO")
                 return pts_aprobados, pts_fallidos, pts_omitidos
 
-            print(f"\\n    >> Procesando {pt['id']}")
+            print(f"\n    >> Procesando {pt['id']}")
 
             try:
+
                 if DRY_RUN:
                     print(f"    [DRY RUN] {pt['id']} NO fue aprobado realmente")
+
                     pts_aprobados.append({
                         "id": pt["id"],
                         "area": pt["area"],
                         "estado": pt["estado"],
                         "modo": "SIMULADO"
                     })
+
                     continue
 
-                sel = await seleccionar_fila_pt(page, frame, pt["id"])
+                # =====================================================
+                # SELECCIONAR FILA
+                # =====================================================
+
+                sel = await seleccionar_fila_pt(
+                    page,
+                    frame,
+                    pt["id"]
+                )
+
                 print(f"    selección Playwright: {sel}")
 
                 if not sel.get("found"):
-                    pts_fallidos.append(f"{pt['id']} - fila no encontrada/no seleccionable")
-                    await screenshot(page, f"err_select_{pt['id']}")
+                    pts_fallidos.append(
+                        f"{pt['id']} - fila no encontrada/no seleccionable"
+                    )
+
+                    await screenshot(
+                        page,
+                        f"err_select_{pt['id']}"
+                    )
+
                     continue
 
-                await screenshot(page, f"fila_select_{pt['id']}")
+                if not sel.get("selected"):
+                    pts_fallidos.append(
+                        f"{pt['id']} - fila no quedó seleccionada"
+                    )
+
+                    await screenshot(
+                        page,
+                        f"err_not_selected_{pt['id']}"
+                    )
+
+                    continue
+
+                await screenshot(
+                    page,
+                    f"fila_select_{pt['id']}"
+                )
+
+                # =====================================================
+                # VALIDAR BOTON APROBAR
+                # =====================================================
 
                 btn = await frame.evaluate(JS_CHECK_BTN_APROBAR)
+
                 print(f"    botón Aprobar: {btn}")
 
                 if not btn.get("found"):
-                    pts_fallidos.append(f"{pt['id']} - botón Aprobar no visible")
-                    await screenshot(page, f"err_nobtn_{pt['id']}")
+                    pts_fallidos.append(
+                        f"{pt['id']} - botón Aprobar no visible"
+                    )
+
+                    await screenshot(
+                        page,
+                        f"err_nobtn_{pt['id']}"
+                    )
+
                     continue
 
                 if btn.get("disabled"):
-                    print("    Aprobar deshabilitado, reintentando selección")
+                    pts_fallidos.append(
+                        f"{pt['id']} - botón Aprobar deshabilitado"
+                    )
 
-                    sel_retry = await seleccionar_fila_pt(page, frame, pt["id"])
-                    print(f"    selección retry: {sel_retry}")
+                    await screenshot(
+                        page,
+                        f"err_disabled_{pt['id']}"
+                    )
 
-                    await page.wait_for_timeout(1200)
+                    continue
 
-                    btn2 = await frame.evaluate(JS_CHECK_BTN_APROBAR)
-                    print(f"    botón retry: {btn2}")
+                await screenshot(
+                    page,
+                    f"pre_{pt['id']}"
+                )
 
-                    if btn2.get("disabled"):
-                        pts_fallidos.append(f"{pt['id']} - botón Aprobar deshabilitado")
-                        await screenshot(page, f"err_disabled_{pt['id']}")
-                        continue
+                # =====================================================
+                # CLICK APROBAR
+                # =====================================================
 
-                await screenshot(page, f"pre_{pt['id']}")
+                click_r = await frame.evaluate(
+                    JS_CLICK_BTN_APROBAR
+                )
 
-                click_r = await frame.evaluate(JS_CLICK_BTN_APROBAR)
                 print(f"    click Aprobar: {click_r}")
 
                 if not click_r.get("clicked"):
+
                     print("    Retry Aprobar con locator real")
 
                     aprobar_btn = frame.locator(
@@ -778,73 +836,189 @@ async def aprobar_pts(page, frame):
                         "via": "locator real"
                     }
 
-                    print(f"    click Aprobar retry: {click_r}")
+                    print(
+                        f"    click Aprobar retry: {click_r}"
+                    )
 
                 await page.wait_for_timeout(2000)
+
+                # =====================================================
+                # DETECTAR POPUP
+                # =====================================================
 
                 popup = {"found": False}
 
                 for intento in range(14):
+
                     await page.wait_for_timeout(700)
 
-                    popup = await frame.evaluate(JS_DETECT_POPUP)
+                    popup = await frame.evaluate(
+                        JS_DETECT_POPUP
+                    )
 
                     if popup.get("found"):
-                        print(f"    popup OK intento {intento + 1}: {popup}")
+
+                        print(
+                            f"    popup OK intento {intento + 1}: {popup}"
+                        )
+
                         break
 
-                await screenshot(page, f"popup_{pt['id']}")
+                await screenshot(
+                    page,
+                    f"popup_{pt['id']}"
+                )
 
                 if not popup.get("found"):
+
                     pts_fallidos.append(
                         f"{pt['id']} - popup Aprobar no apareció"
                     )
-                    print("    ERROR: popup Aprobar no apareció")
+
+                    print(
+                        "    ERROR: popup Aprobar no apareció"
+                    )
+
                     continue
 
-                aceptar = await frame.evaluate(JS_CLICK_ACEPTAR)
+                # =====================================================
+                # CLICK ACEPTAR
+                # =====================================================
+
+                aceptar = await frame.evaluate(
+                    JS_CLICK_ACEPTAR
+                )
+
                 print(f"    Aceptar: {aceptar}")
 
                 if not aceptar.get("ok"):
-                    pts_fallidos.append(f"{pt['id']} - click Aceptar falló: {aceptar}")
-                    await screenshot(page, f"err_aceptar_{pt['id']}")
+
+                    pts_fallidos.append(
+                        f"{pt['id']} - click Aceptar falló"
+                    )
+
+                    await screenshot(
+                        page,
+                        f"err_aceptar_{pt['id']}"
+                    )
+
                     continue
 
-                await page.wait_for_timeout(3500)
+                # =====================================================
+                # ESPERAR PROCESAMIENTO REAL CENTRALITY
+                # =====================================================
 
-                refresh = await frame.evaluate(JS_REFRESH_GRID)
+                print("    esperando procesamiento Centrality...")
+
+                await page.wait_for_timeout(5000)
+
+                # esperar cierre popup
+                for _ in range(20):
+
+                    popup_abierto = await frame.evaluate("""
+                    () => {
+                        return Array.from(
+                            document.querySelectorAll(".x-window")
+                        ).some(w =>
+                            w.offsetParent &&
+                            (
+                                (w.innerText || "").includes("Aprobar") ||
+                                (w.innerText || "").includes("Confirm")
+                            )
+                        );
+                    }
+                    """)
+
+                    if not popup_abierto:
+                        break
+
+                    await page.wait_for_timeout(1000)
+
+                # refresh grilla
+                refresh = await frame.evaluate(
+                    JS_REFRESH_GRID
+                )
+
                 print(f"    refresh grilla: {refresh}")
 
-                await page.wait_for_timeout(2500)
-                await screenshot(page, f"post_{pt['id']}")
+                await page.wait_for_timeout(5000)
 
-                aun_existe = await frame.evaluate(JS_PT_EXISTE, pt["id"])
+                # =====================================================
+                # ESPERAR DESAPARICION PT
+                # =====================================================
 
-                if aun_existe:
-                    print(f"    ADVERTENCIA: {pt['id']} sigue visible")
+                desaparecio = False
+
+                for intento in range(20):
+
+                    aun_existe = await frame.evaluate(
+                        JS_PT_EXISTE,
+                        pt["id"]
+                    )
+
+                    if not aun_existe:
+                        desaparecio = True
+                        break
+
+                    print(
+                        f"    esperando desaparición PT... intento {intento+1}"
+                    )
+
+                    await page.wait_for_timeout(1500)
+
+                await screenshot(
+                    page,
+                    f"post_{pt['id']}"
+                )
+
+                if desaparecio:
+
+                    print(
+                        f"    Confirmado: {pt['id']} ya no aparece"
+                    )
+
+                    pts_aprobados.append({
+                        "id": pt["id"],
+                        "area": pt["area"],
+                        "estado": pt["estado"],
+                        "modo": "REAL"
+                    })
+
+                    print(
+                        f"    APROBADO REAL: {pt['id']}"
+                    )
+
                 else:
-                    print(f"    Confirmado: {pt['id']} ya no aparece")
 
-                pts_aprobados.append({
-                    "id": pt["id"],
-                    "area": pt["area"],
-                    "estado": pt["estado"],
-                    "modo": "REAL"
-                })
+                    print(
+                        f"    ERROR: {pt['id']} sigue visible"
+                    )
 
-                print(f"    APROBADO: {pt['id']}")
+                    pts_fallidos.append(
+                        f"{pt['id']} - sigue visible después de aprobar"
+                    )
 
             except Exception as e:
+
                 msg = str(e)[:250]
-                pts_fallidos.append(f"{pt['id']} - {msg}")
+
+                pts_fallidos.append(
+                    f"{pt['id']} - {msg}"
+                )
+
                 print(f"    EXCEPCIÓN: {msg}")
-                await screenshot(page, f"exc_{pt['id']}")
+
+                await screenshot(
+                    page,
+                    f"exc_{pt['id']}"
+                )
 
         if len(pts_aprobados) >= MAX_APROBACIONES:
             print("  LÍMITE DE SEGURIDAD ALCANZADO")
             break
 
         if pagina < paginas:
+
             sig = await frame.evaluate(JS_NEXT_PAGE)
 
             if not sig:
@@ -854,6 +1028,7 @@ async def aprobar_pts(page, frame):
             await page.wait_for_timeout(4000)
 
     await screenshot(page, "final")
+
     return pts_aprobados, pts_fallidos, pts_omitidos
 
 # =============================================================================
@@ -1058,4 +1233,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-    
