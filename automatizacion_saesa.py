@@ -502,85 +502,50 @@ async def aplicar_filtro_pcct(page, frame):
     if not r_pcct.get("ok"):
         raise RuntimeError(f"No se pudo seleccionar Estado PCCT. Opciones visibles: {r_pcct}")
 
-    print("  Aplicar botón real inferior")
+    print("  Aplicar con mouse real por coordenada")
 
-    r_aplicar = await frame.evaluate("""
+    coords_aplicar = await frame.evaluate("""
     () => {
         const win = Array.from(document.querySelectorAll(".x-window"))
             .filter(w => w.offsetParent && (w.innerText || "").includes("Filtros"))[0];
 
         if (!win) return { ok:false, msg:"No encontré ventana Filtros" };
 
-        // Forzar commit del combo Estado
-        const inputs = Array.from(win.querySelectorAll("input"))
-            .filter(i => i.offsetParent);
-
-        for (const inp of inputs) {
-            if ((inp.value || "").trim() === "Revisión y Autorización PCCT") {
-                inp.focus();
-                inp.dispatchEvent(new Event("input", { bubbles:true }));
-                inp.dispatchEvent(new Event("change", { bubbles:true }));
-                inp.dispatchEvent(new Event("blur", { bubbles:true }));
-            }
-        }
-
         const wr = win.getBoundingClientRect();
 
-        // Buscar el botón inferior "Aplicar", no el texto de toolbar
-        const candidatos = Array.from(win.querySelectorAll("*"))
-            .filter(el => el.offsetParent);
-
-        for (const el of candidatos) {
-            const txt = (el.innerText || el.textContent || "").trim();
-            const r = el.getBoundingClientRect();
-
-            if (
-                txt === "Aplicar" &&
-                r.y > wr.bottom - 80 &&
-                r.x < wr.left + 120
-            ) {
-                el.click();
-
-                return {
-                    ok:true,
-                    metodo:"boton inferior por texto",
-                    tag:el.tagName,
-                    cls:String(el.className || ""),
-                    x:Math.round(r.x),
-                    y:Math.round(r.y)
-                };
-            }
-        }
-
-        // Fallback: click coordenada exacta del botón verde inferior izquierdo
-        const x = wr.left + 35;
-        const y = wr.bottom - 20;
-        const el = document.elementFromPoint(x, y);
-
-        if (el) {
-            el.click();
-
-            return {
-                ok:true,
-                metodo:"coordenada inferior izquierda",
-                tag:el.tagName,
-                cls:String(el.className || ""),
-                x:Math.round(x),
-                y:Math.round(y)
-            };
-        }
-
-        return { ok:false, msg:"No se pudo hacer click en Aplicar" };
+        return {
+            ok:true,
+            x: Math.round(wr.left + 28),
+            y: Math.round(wr.bottom - 18),
+            winLeft: Math.round(wr.left),
+            winBottom: Math.round(wr.bottom)
+        };
     }
     """)
 
-    print(f"  Aplicar: {r_aplicar}")
+    print(f"  coords Aplicar: {coords_aplicar}")
 
-    if not r_aplicar.get("ok"):
-        raise RuntimeError(f"No se pudo presionar Aplicar: {r_aplicar}")
+    if not coords_aplicar.get("ok"):
+        raise RuntimeError(f"No se pudo calcular coordenada Aplicar: {coords_aplicar}")
 
+    await page.mouse.click(coords_aplicar["x"], coords_aplicar["y"])
     await page.wait_for_timeout(8000)
     await screenshot(page, "filtro_04_aplicado")
+
+    filtro_sigue_abierto = await frame.evaluate("""
+    () => {
+        const win = Array.from(document.querySelectorAll(".x-window"))
+            .filter(w => w.offsetParent && (w.innerText || "").includes("Filtros"))[0];
+        return !!win;
+    }
+    """)
+
+    print(f"  filtro sigue abierto: {filtro_sigue_abierto}")
+
+    if filtro_sigue_abierto:
+        await page.mouse.click(coords_aplicar["x"], coords_aplicar["y"])
+        await page.wait_for_timeout(8000)
+        await screenshot(page, "filtro_04_aplicado_retry")
 
     info = await frame.evaluate("""
     () => {
@@ -604,7 +569,7 @@ async def aplicar_filtro_pcct(page, frame):
     print(f"  resultado filtro: {info}")
 
     return info
-
+    
 # =============================================================================
 # SELECCIÓN REAL DE FILA
 # =============================================================================
