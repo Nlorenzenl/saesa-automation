@@ -1,6 +1,6 @@
 """
 Automatización SAESA – Autorización diaria de PT's
-Filtro: Estado = PCCT + bandeja de trabajo
+Filtro: Estado = PCCT (usando el arrow trigger correcto)
 Aprobación: SOLO PT's cuya columna Área contenga "Metropolitana"
 """
 
@@ -13,15 +13,15 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
 
-SAESA_URL     = "https://stx.saesa.cl:8091/backend/sts/login.php?backurl=%2Fbackend%2Fsts%2Fcentrality.php"
-SAESA_USER    = os.environ["SAESA_USER"]
-SAESA_PASS    = os.environ["SAESA_PASS"]
-GMAIL_USER    = os.environ["GMAIL_USER"]
-GMAIL_PASS    = os.environ["GMAIL_APP_PASS"]
-EMAIL_DEST    = os.environ["EMAIL_DEST"]
-TIMEOUT       = 30_000
-ESTADO_FILTRO = "Revisión y Autorización PCCT"
-AREA_REQUERIDA = "Metropolitana"  # Solo aprobamos PT's cuya área contenga esta palabra
+SAESA_URL      = "https://stx.saesa.cl:8091/backend/sts/login.php?backurl=%2Fbackend%2Fsts%2Fcentrality.php"
+SAESA_USER     = os.environ["SAESA_USER"]
+SAESA_PASS     = os.environ["SAESA_PASS"]
+GMAIL_USER     = os.environ["GMAIL_USER"]
+GMAIL_PASS     = os.environ["GMAIL_APP_PASS"]
+EMAIL_DEST     = os.environ["EMAIL_DEST"]
+TIMEOUT        = 30_000
+ESTADO_FILTRO  = "Revisión y Autorización PCCT"
+AREA_REQUERIDA = "Metropolitana"
 
 
 async def screenshot(page, nombre):
@@ -60,7 +60,6 @@ async def hacer_login(page):
     await page.wait_for_load_state("networkidle", timeout=30_000)
     await page.wait_for_timeout(2000)
     print("  ✓ Login OK")
-    await screenshot(page, "01_login_ok")
 
 
 async def navegar_a_permisos(page):
@@ -72,7 +71,6 @@ async def navegar_a_permisos(page):
     await page.click('a:has-text("DMS")')
     await page.wait_for_load_state("networkidle", timeout=30_000)
     await page.wait_for_timeout(2000)
-
     frame = await get_content_frame(page)
     print(f"  → frame: '{frame.name}'")
     await frame.click('text=Planificación')
@@ -85,234 +83,286 @@ async def navegar_a_permisos(page):
 
 
 async def aplicar_filtro_estado(page, frame):
-    """Aplica solo el filtro de Estado = PCCT (que sabemos que funciona)."""
-    print("\n[3] FILTRO (solo Estado PCCT)")
+    """
+    Aplica filtro Estado = PCCT.
+    El popup del filtro tiene estas filas (de arriba a abajo):
+      En bandeja de trabajo (checkbox)
+      Ids de permisos de trabajo (texto)
+      Entidad de contexto de origen (combo, arrow en y≈261)
+      Identificador de área (texto)
+      Inicio disponibilidad desde/hasta (fechas)
+      Disponibilidad horaria
+      Ingresada desde/hasta
+      Alimentador
+      Elemento de maniobra
+      Áreas (combo+list-trigger, arrow en y≈495)
+      Tipo de permiso de trabajo (combo, arrow en y≈521)  ← ESTE ES EL QUE SE CLICKEÓ MAL
+      Estado (combo, arrow en y≈547)                      ← ESTE ES EL CORRECTO
+      Creador (combo, arrow en y≈573)
+      Sector requirente (combo, arrow en y≈599)
+    """
+    print("\n[3] FILTRO - Estado PCCT")
     await frame.click('text=Filtro')
     await page.wait_for_timeout(2500)
     await screenshot(page, "04_filtro_abierto")
 
-    # El Estado PCCT se selecciona via clic en el arrow trigger y luego en el item
-    # Sabemos que el frame 'content' tiene el arrow en y≈521 y el dropdown aparece en ese frame
-    estado_ok = await frame.evaluate(f'''() => {{
-        // Buscar el arrow trigger del campo Estado (y≈521 en coordenadas del iframe)
+    # Diagnóstico: listar TODOS los arrow triggers con sus posiciones exactas
+    triggers_info = await frame.evaluate('''() => {
         const triggers = Array.from(document.querySelectorAll("img.x-form-arrow-trigger"));
-        // El trigger de Estado es el que está más cerca del label "Estado:"
-        // Basado en logs anteriores: el Estado está en y≈521 dentro del iframe
-        // Intentar disparar clic en todos y ver cuál abre el dropdown correcto
-        for (const t of triggers) {{
+        return triggers.filter(t => t.offsetParent).map(t => {
             const r = t.getBoundingClientRect();
-            if (r.y > 515 && r.y < 540 && r.x > 830) {{
-                t.click();
-                return {{found: true, x: Math.round(r.x), y: Math.round(r.y)}};
-            }}
-        }}
-        // Fallback: último arrow trigger visible
-        const visible = triggers.filter(t => t.offsetParent);
-        if (visible.length > 0) {{
-            const last = visible[visible.length - 1];
-            last.click();
-            const r = last.getBoundingClientRect();
-            return {{found: true, via: "last", x: Math.round(r.x), y: Math.round(r.y)}};
-        }}
-        return {{found: false}};
-    }}''')
-    print(f"  → Click arrow Estado: {estado_ok}")
-    await page.wait_for_timeout(1500)
-    await screenshot(page, "04b_dropdown_estado")
+            // Buscar el label asociado mirando el td anterior en la tabla
+            let label = "";
+            try {
+                const row = t.closest("tr");
+                if (row) {
+                    const firstTd = row.querySelector("td:first-child");
+                    label = firstTd ? firstTd.innerText.trim() : "";
+                }
+            } catch(e) {}
+            return {x: Math.round(r.x), y: Math.round(r.y), label};
+        });
+    }''')
+    print(f"  → Arrow triggers con labels:")
+    for i, t in enumerate(triggers_info):
+        print(f"    [{i}] y={t['y']} label='{t['label']}'")
 
-    # Seleccionar PCCT en el dropdown (funciona en frame 'content')
-    pcct_ok = await frame.evaluate(f'''() => {{
-        const all = Array.from(document.querySelectorAll("div,li,td,span"));
-        for (const el of all) {{
-            if (!el.offsetParent) continue;
-            const t = (el.innerText || "").trim();
-            if (t.includes("PCCT") && t.includes("Revisión") && t.length < 60) {{
-                el.click();
-                return {{ok: true, text: t}};
+    # Buscar el arrow trigger cuyo label contenga "Estado"
+    estado_trigger = None
+    for t in triggers_info:
+        if 'Estado' in t['label'] or 'estado' in t['label']:
+            estado_trigger = t
+            print(f"  → Trigger Estado encontrado: y={t['y']}")
+            break
+
+    # Si no encontramos por label, usar la posición conocida (y≈547 según el layout)
+    if not estado_trigger:
+        # Buscar el que esté entre y=540 y y=560
+        for t in triggers_info:
+            if 540 <= t['y'] <= 560:
+                estado_trigger = t
+                print(f"  → Trigger Estado por posición: y={t['y']}")
+                break
+
+    if not estado_trigger and triggers_info:
+        # Fallback: el penúltimo visible (antes de Creador y Sector requirente)
+        visible = [t for t in triggers_info if t['y'] > 400]
+        if len(visible) >= 3:
+            estado_trigger = visible[-3]  # antepenúltimo
+            print(f"  → Trigger Estado por índice: y={estado_trigger['y']}")
+
+    if estado_trigger:
+        print(f"  → Click en trigger Estado ({estado_trigger['x']}, {estado_trigger['y']})")
+        # Usar frame.evaluate para hacer clic directamente en el elemento
+        await frame.evaluate(f'''() => {{
+            const triggers = Array.from(document.querySelectorAll("img.x-form-arrow-trigger"));
+            const target = triggers.find(t => {{
+                const r = t.getBoundingClientRect();
+                return Math.round(r.y) === {estado_trigger['y']} && t.offsetParent;
+            }});
+            if (target) target.click();
+        }}''')
+        await page.wait_for_timeout(2000)
+        await screenshot(page, "04b_dropdown_estado")
+
+        # Seleccionar PCCT en el dropdown
+        pcct_ok = await frame.evaluate(f'''() => {{
+            const all = Array.from(document.querySelectorAll("div,li,td,span"));
+            for (const el of all) {{
+                if (!el.offsetParent) continue;
+                const t = (el.innerText || "").trim();
+                if (t.includes("PCCT") && t.includes("Revisión") && t.length < 80) {{
+                    el.click();
+                    return {{ok: true, text: t}};
+                }}
             }}
-        }}
-        return {{ok: false}};
-    }}''')
-    print(f"  → PCCT seleccionado: {pcct_ok}")
-    await page.wait_for_timeout(500)
-    await screenshot(page, "04c_estado_pcct")
+            return {{ok: false}};
+        }}''')
+        print(f"  → PCCT: {pcct_ok}")
+        await page.wait_for_timeout(500)
+        await screenshot(page, "04c_pcct_seleccionado")
+    else:
+        print("  ⚠️ No se encontró trigger de Estado")
 
     # Clic en Aplicar
     await frame.evaluate('''() => {
-        const btns = Array.from(document.querySelectorAll("button,input[type='button'],a,span"));
+        const btns = Array.from(document.querySelectorAll("button,a,span"));
         for (const btn of btns) {
             if (!btn.offsetParent) continue;
-            const t = (btn.innerText || btn.value || btn.textContent || "").trim();
-            if (t === "Aplicar") { btn.click(); return; }
+            if ((btn.innerText || btn.textContent || "").trim() === "Aplicar") {
+                btn.click(); return;
+            }
         }
     }''')
     print("  ✓ Aplicar")
     await page.wait_for_load_state("networkidle", timeout=30_000)
     await page.wait_for_timeout(3000)
     await screenshot(page, "05_filtro_aplicado")
+
+    # Verificar cuántos registros quedaron
+    total = await frame.evaluate('''() => {
+        const el = document.querySelector('[class*="paging-info"], .x-paging-info, [id*="paging-info"]');
+        return el ? el.innerText : "no encontrado";
+    }''')
+    print(f"  → Total registros tras filtro: {total}")
     print("  ✓ Filtro aplicado")
 
 
-async def leer_todos_los_pts(frame):
-    """
-    Lee TODOS los PT's de la lista paginada (puede haber varias páginas).
-    Retorna lista de dicts: {id, area, descripcion, fila_idx}
-    Solo incluye PT's cuya área contenga "Metropolitana".
-    """
-    pts_metropolitana = []
-    pts_omitidos = []
-    pagina = 1
+async def leer_pts_pagina_actual(frame):
+    """Lee los PT's de la página actual. Retorna (metropolitana[], omitidos[])."""
+    pts_metro = []
+    pts_omit  = []
 
-    while True:
-        print(f"  → Leyendo página {pagina}...")
-        await frame.wait_for_timeout(1000)
+    # ExtJS renderiza solo las filas visibles en el viewport
+    # La tabla real tiene class x-grid3-row
+    filas_info = await frame.evaluate('''() => {
+        const filas = Array.from(document.querySelectorAll(".x-grid3-row"));
+        return filas.map(f => {
+            const celdas = Array.from(f.querySelectorAll(".x-grid3-cell-inner"));
+            return celdas.map(c => c.innerText.trim());
+        }).filter(row => row.length > 0);
+    }''')
 
-        filas = await frame.query_selector_all('table tbody tr')
-        print(f"    Filas en página {pagina}: {len(filas)}")
+    for row in filas_info:
+        if not row or not re.match(r'\d{4}-\d{5}', row[0] if row else ''):
+            continue
+        id_pt   = row[0]
+        # Columna 2 es Área (índice 2: Id, Fecha, Área, Estado, Tipo, Desc)
+        area_pt = row[2] if len(row) > 2 else ""
+        estado_pt = row[3] if len(row) > 3 else ""
 
-        for i, fila in enumerate(filas):
-            celdas = await fila.query_selector_all('td')
-            if len(celdas) < 3:
-                continue
-            id_pt   = (await celdas[0].inner_text()).strip()
-            area_pt = (await celdas[2].inner_text()).strip()  # columna Área
-            desc_pt = (await celdas[-1].inner_text()).strip()[:60]
+        # Solo procesar los que tienen estado PCCT
+        if "PCCT" not in estado_pt:
+            continue
 
-            if not re.match(r'\d{4}-\d{5}', id_pt):
-                continue
-
-            if AREA_REQUERIDA.lower() in area_pt.lower():
-                pts_metropolitana.append({"id": id_pt, "area": area_pt, "desc": desc_pt})
-                print(f"    ✅ {id_pt} | {area_pt[:35]}")
-            else:
-                pts_omitidos.append({"id": id_pt, "area": area_pt})
-                print(f"    ⏭️  {id_pt} | {area_pt[:35]} — OMITIDO (no es Metropolitana)")
-
-        # Verificar si hay página siguiente
-        siguiente = await frame.query_selector('button[id*="next"]:not([disabled]), .x-tbar-page-next:not(.x-item-disabled), [class*="page-next"]:not([disabled])')
-        if siguiente:
-            await siguiente.click()
-            await frame.wait_for_timeout(2000)
-            pagina += 1
+        if AREA_REQUERIDA.lower() in area_pt.lower():
+            pts_metro.append({"id": id_pt, "area": area_pt})
+            print(f"    ✅ {id_pt} | {area_pt[:40]} | {estado_pt[:30]}")
         else:
-            break
+            pts_omit.append({"id": id_pt, "area": area_pt})
+            print(f"    ⏭️  {id_pt} | {area_pt[:40]} — omitido")
 
-    return pts_metropolitana, pts_omitidos
+    return pts_metro, pts_omit
 
 
 async def aprobar_pts(page, frame):
-    """
-    Aprueba los PT's uno a uno.
-    Estrategia: buscar cada PT por su ID en la lista y aprobarlo.
-    Solo aprueba PT's cuya área sea Metropolitana.
-    """
-    print("\n[4] LEYENDO PT's DE LA LISTA")
-    pts_metro, pts_omitidos = await leer_todos_los_pts(frame)
-
-    print(f"\n  → PT's Metropolitana a aprobar: {len(pts_metro)}")
-    print(f"  → PT's omitidos (otra zona): {len(pts_omitidos)}")
-
-    if not pts_metro:
-        print("  ✓ No hay PT's Metropolitana para aprobar hoy.")
-        await screenshot(page, "06_final")
-        return [], []
-
-    print("\n[5] APROBANDO PT's METROPOLITANA")
+    print("\n[4] APROBANDO PT's METROPOLITANA con estado PCCT")
     pts_aprobados = []
     pts_fallidos  = []
+    pts_omitidos  = []
 
-    # Volver a página 1 si navegamos
-    try:
-        primera_pag = await frame.query_selector('button[id*="first"], .x-tbar-page-first, [class*="page-first"]')
-        if primera_pag:
-            await primera_pag.click()
-            await frame.wait_for_timeout(1500)
-    except Exception:
-        pass
+    # Obtener total de páginas
+    paginacion = await frame.evaluate('''() => {
+        const info = document.querySelector(".x-paging-info, [class*='paging-info']");
+        const total_el = document.querySelector("input.x-tbar-page-number");
+        const pages_el = document.querySelectorAll(".x-paging-info");
+        return {
+            info: info ? info.innerText : "",
+            currentPage: total_el ? total_el.value : "1"
+        };
+    }''')
+    print(f"  → Paginación: {paginacion}")
 
-    for pt in pts_metro:
-        try:
-            print(f"\n  → Buscando PT {pt['id']} en la lista...")
+    # Obtener número total de páginas del indicador "Página X de Y"
+    total_paginas = await frame.evaluate('''() => {
+        // Buscar el texto "de X" en la barra de paginación
+        const all = Array.from(document.querySelectorAll("*"));
+        for (const el of all) {
+            if (!el.offsetParent || el.children.length > 2) continue;
+            const t = (el.innerText || "").trim();
+            if (t.match(/^de \d+$/)) return parseInt(t.replace("de ", ""));
+        }
+        return 1;
+    }''')
+    print(f"  → Total páginas: {total_paginas}")
 
-            # Buscar la fila con este ID en la tabla actual
-            encontrado = False
-            for intento in range(3):  # máx 3 páginas buscando
-                filas = await frame.query_selector_all('table tbody tr')
-                for fila in filas:
-                    celdas = await fila.query_selector_all('td')
-                    if not celdas:
-                        continue
-                    id_celda = (await celdas[0].inner_text()).strip()
-                    if id_celda == pt['id']:
-                        # Hacer clic en la fila para seleccionarla
-                        await fila.click()
-                        await page.wait_for_timeout(800)
-                        encontrado = True
-                        print(f"    ✓ Fila encontrada")
-                        break
+    # Leer SOLO la primera página para identificar PT's Metropolitana PCCT
+    # (el filtro PCCT + bandeja ya reduce bastante)
+    print(f"\n  → Leyendo PT's en las páginas disponibles...")
 
-                if encontrado:
-                    break
+    paginas_a_leer = min(total_paginas, 20)  # máximo 20 páginas para evitar timeout
 
-                # No encontrado en esta página, ir a siguiente
-                siguiente = await frame.query_selector('button[id*="next"]:not([disabled]), .x-tbar-page-next:not(.x-item-disabled)')
-                if siguiente:
-                    await siguiente.click()
-                    await frame.wait_for_timeout(1500)
-                else:
-                    break
+    for pagina in range(1, paginas_a_leer + 1):
+        print(f"  → Página {pagina}/{paginas_a_leer}")
+        metro, omit = await leer_pts_pagina_actual(frame)
+        pts_omitidos.extend(omit)
 
-            if not encontrado:
-                pts_fallidos.append(f"{pt['id']} (no encontrado en tabla)")
-                print(f"    ✗ PT {pt['id']} no encontrado en la tabla")
-                continue
+        # Aprobar los PT's metropolitana encontrados en ESTA página
+        for pt in metro:
+            try:
+                print(f"\n  → Aprobando {pt['id']}...")
+                # Buscar la fila en la tabla actual
+                encontrado = await frame.evaluate(f'''() => {{
+                    const filas = Array.from(document.querySelectorAll(".x-grid3-row"));
+                    for (const fila of filas) {{
+                        const celda = fila.querySelector(".x-grid3-cell-inner");
+                        if (celda && celda.innerText.trim() === "{pt['id']}") {{
+                            fila.click();
+                            return true;
+                        }}
+                    }}
+                    return false;
+                }}''')
 
-            # Clic en botón "Aprobar" de la barra
-            await frame.click('a:has-text("Aprobar"), button:has-text("Aprobar")')
-            await page.wait_for_timeout(1500)
-            await screenshot(page, f"aprobar_{pt['id']}")
+                if not encontrado:
+                    pts_fallidos.append(f"{pt['id']} (fila no encontrada)")
+                    continue
 
-            # Aceptar el popup (sin comentario)
-            aceptar_ok = await frame.evaluate('''() => {
-                for (const btn of document.querySelectorAll("button,input[type='button']")) {
-                    if (!btn.offsetParent) continue;
-                    if ((btn.innerText || btn.value || "").trim() === "Aceptar") {
-                        btn.click(); return true;
-                    }
-                }
-                return false;
-            }''')
-            if not aceptar_ok:
-                # Fallback en page principal
-                await page.evaluate('''() => {
+                await page.wait_for_timeout(800)
+
+                # Clic en Aprobar
+                await frame.click('a:has-text("Aprobar"), button:has-text("Aprobar")')
+                await page.wait_for_timeout(1500)
+                await screenshot(page, f"aprobar_{pt['id']}")
+
+                # Aceptar popup
+                aceptar = await frame.evaluate('''() => {
                     for (const btn of document.querySelectorAll("button,input[type='button']")) {
                         if (!btn.offsetParent) continue;
                         if ((btn.innerText || btn.value || "").trim() === "Aceptar") {
-                            btn.click();
+                            btn.click(); return true;
                         }
                     }
+                    return false;
                 }''')
+                if not aceptar:
+                    await page.evaluate('''() => {
+                        for (const btn of document.querySelectorAll("button,input[type='button']")) {
+                            if (!btn.offsetParent) continue;
+                            if ((btn.innerText || btn.value || "").trim() === "Aceptar") btn.click();
+                        }
+                    }''')
 
-            await page.wait_for_load_state("networkidle", timeout=15_000)
+                await page.wait_for_load_state("networkidle", timeout=15_000)
+                await page.wait_for_timeout(1500)
+                pts_aprobados.append(pt['id'])
+                print(f"    ✓ {pt['id']} APROBADO")
+
+            except Exception as e:
+                msg = str(e)[:80]
+                pts_fallidos.append(f"{pt['id']}: {msg}")
+                print(f"    ✗ Error: {msg}")
+                await screenshot(page, f"error_{pt['id']}")
+
+        # Ir a página siguiente si hay más
+        if pagina < paginas_a_leer:
+            siguiente_ok = await frame.evaluate('''() => {
+                // Botón siguiente: class x-tbar-page-next, no debe tener x-item-disabled
+                const btn = document.querySelector(".x-tbar-page-next:not(.x-item-disabled)");
+                if (btn) { btn.click(); return true; }
+                return false;
+            }''')
+            if not siguiente_ok:
+                print("  → No hay más páginas")
+                break
             await page.wait_for_timeout(2000)
-            pts_aprobados.append(pt['id'])
-            print(f"    ✓ {pt['id']} APROBADO")
-
-        except PlaywrightTimeout:
-            pts_fallidos.append(f"{pt['id']} (timeout)")
-            print(f"    ✗ Timeout aprobando {pt['id']}")
-        except Exception as e:
-            msg = str(e)[:80]
-            pts_fallidos.append(f"{pt['id']}: {msg}")
-            print(f"    ✗ Error: {msg}")
-            await screenshot(page, f"error_{pt['id']}")
 
     await screenshot(page, "06_final")
-    return pts_aprobados, pts_fallidos
+    return pts_aprobados, pts_fallidos, pts_omitidos
 
 
 def enviar_reporte(pts_aprobados, pts_fallidos, pts_omitidos=None, error_critico=None):
-    fecha = datetime.now().strftime("%d/%m/%Y %H:%M")
+    fecha    = datetime.now().strftime("%d/%m/%Y %H:%M")
     omitidos = pts_omitidos or []
 
     lista_ok = "".join(
@@ -342,8 +392,7 @@ def enviar_reporte(pts_aprobados, pts_fallidos, pts_omitidos=None, error_critico
       </div>
       <div style="border:1px solid #ddd;border-top:none;padding:20px;border-radius:0 0 8px 8px">
         <p><strong>Fecha:</strong> {fecha}</p>
-        <p><strong>Filtro aplicado:</strong> Estado = {ESTADO_FILTRO}</p>
-        <p><strong>Criterio de aprobación:</strong> Solo PT's con área que contenga "{AREA_REQUERIDA}"</p>
+        <p><strong>Criterio:</strong> Estado = {ESTADO_FILTRO} + Área contiene "{AREA_REQUERIDA}"</p>
         {error_bloque}
         <h3 style="color:#006600">✅ PT's Aprobados ({len(pts_aprobados)})</h3>
         <table style="border-collapse:collapse;width:100%">{lista_ok}</table>
@@ -354,14 +403,14 @@ def enviar_reporte(pts_aprobados, pts_fallidos, pts_omitidos=None, error_critico
         <p style="color:#999;font-size:11px;margin-top:20px">Bot SAESA – GitHub Actions | Lun–Vie 08:00 Chile</p>
       </div></body></html>"""
 
-    asunto = f"[SAESA] {datetime.now().strftime('%d/%m/%Y')} – {len(pts_aprobados)} aprobados, {len(omitidos)} omitidos"
+    asunto = f"[SAESA] {datetime.now().strftime('%d/%m/%Y')} – {len(pts_aprobados)} aprobados"
     if error_critico:
         asunto = f"[SAESA] ⚠️ ERROR {datetime.now().strftime('%d/%m/%Y')}"
 
     msg = MIMEMultipart("alternative")
     msg["Subject"] = asunto
     msg["From"] = GMAIL_USER
-    msg["To"] = EMAIL_DEST
+    msg["To"]   = EMAIL_DEST
     msg.attach(MIMEText(html, "html"))
     try:
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
@@ -389,7 +438,7 @@ async def main():
             await hacer_login(page)
             frame = await navegar_a_permisos(page)
             await aplicar_filtro_estado(page, frame)
-            pts_aprobados, pts_fallidos = await aprobar_pts(page, frame)
+            pts_aprobados, pts_fallidos, pts_omitidos = await aprobar_pts(page, frame)
         except Exception as e:
             error_critico = str(e)
             print(f"\n✗ ERROR CRÍTICO: {e}")
