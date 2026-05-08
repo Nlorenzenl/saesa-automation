@@ -506,33 +506,44 @@ async def aplicar_filtro_pcct(page, frame):
     if not r_pcct.get("ok"):
         raise RuntimeError(f"No se pudo seleccionar Estado PCCT. Opciones visibles: {r_pcct}")
 
-    print("  Aplicar con click real Playwright")
+    print("  Aplicar con JS directo dentro de ventana Filtros")
 
-    aplicar = frame.locator(".x-window", has_text="Filtros").locator("text=Aplicar").first()
-    await aplicar.click(timeout=5000, force=True)
-
-    await page.wait_for_timeout(6000)
-    await screenshot(page, "filtro_04_aplicado")
-
-    sigue_abierto = await frame.evaluate("""
+    r_aplicar = await frame.evaluate("""
     () => {
         const win = Array.from(document.querySelectorAll(".x-window"))
             .filter(w => w.offsetParent && (w.innerText || "").includes("Filtros"))[0];
 
-        return !!win;
+        if (!win) return {ok:false, msg:"No encontré ventana Filtros"};
+
+        const candidatos = Array.from(win.querySelectorAll("a,button,span,td,div"))
+            .filter(el => el.offsetParent);
+        
+        for (const el of candidatos) {
+            const t = (el.innerText || el.textContent || "").trim();
+
+            if (t === "Aplicar") {
+                el.click();
+                return {
+                    ok:true,
+                    tag:el.tagName,
+                    cls:String(el.className || "")
+                };
+            }
+        }
+
+        return {ok:false, msg:"No encontré botón Aplicar"};
+
     }
+
     """)
+    print(f"  Aplicar: {r_aplicar}")
 
-    if sigue_abierto:
-        print("  Filtro sigue abierto, segundo click en Aplicar")
+    if not r_aplicar.get("ok"):
+        raise RuntimeError(f"No se pudo presionar Aplicar: {r_aplicar}")
 
-        await frame.locator(".x-window", has_text="Filtros").locator("text=Aplicar").first().click(
-            timeout=5000,
-            force=True,
-        )
+    await page.wait_for_timeout(6000)
+    await screenshot(page, "filtro_04_aplicado")
 
-        await page.wait_for_timeout(6000)
-        await screenshot(page, "filtro_04_aplicado_retry")
 
     info = await frame.evaluate("""
     () => {
