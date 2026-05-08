@@ -22,8 +22,8 @@ GMAIL_USER = os.environ["GMAIL_USER"]
 GMAIL_PASS = os.environ["GMAIL_APP_PASS"]
 EMAIL_DEST = os.environ["EMAIL_DEST"]
 
-DRY_RUN = os.environ.get("DRY_RUN", "true").lower() == "false"
-MAX_APROBACIONES = int(os.environ.get("MAX_APROBACIONES", "2"))
+DRY_RUN = os.environ.get("DRY_RUN", "true").lower() == "true"
+MAX_APROBACIONES = int(os.environ.get("MAX_APROBACIONES", "50"))
 
 TIMEOUT = 30_000
 ESTADO_EXACTO = "Revisión y Autorización PCCT"
