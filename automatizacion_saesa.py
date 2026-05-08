@@ -344,66 +344,88 @@ async def aplicar_filtro_pcct(page, frame):
     await page.wait_for_timeout(2000)
     await screenshot(page, "filtro_01_abierto")
 
-    # Click EXACTO en el trigger del campo Estado, buscando por coordenada Y del label "Estado:"
+    # Abrir combo ESTADO:
+    # Estrategia: buscar trigger de "Tipo de permiso de trabajo" y tomar el siguiente trigger hacia abajo.
     r_trigger = await frame.evaluate("""
     () => {
         const labels = Array.from(document.querySelectorAll("label,td,div,span,b"))
-            .filter(el => el.offsetParent && (el.innerText || "").trim() === "Estado:");
+            .filter(el => el.offsetParent);
 
-        if (!labels.length) {
-            return {ok:false, msg:"label Estado no encontrado"};
-        }
+        let tipoLabel = null;
 
-        const label = labels[0];
-        const lr = label.getBoundingClientRect();
-
-        const triggers = Array.from(document.querySelectorAll("img.x-form-arrow-trigger"))
-            .filter(t => t.offsetParent);
-
-        let best = null;
-        let bestScore = 999999;
-
-        for (const t of triggers) {
-            const r = t.getBoundingClientRect();
-
-            // Misma fila del label Estado:
-            const dy = Math.abs((r.y + r.height / 2) - (lr.y + lr.height / 2));
-
-            // Debe estar a la derecha del label:
-            const dx = r.x - lr.x;
-
-            if (dx < 50) continue;
-
-            const score = dy * 1000 + Math.abs(dx);
-
-            if (dy < 8 && score < bestScore) {
-                best = t;
-                bestScore = score;
+        for (const el of labels) {
+            const txt = (el.innerText || "").trim();
+            if (txt === "Tipo de permiso de trabajo:") {
+                tipoLabel = el;
+                break;
             }
         }
 
-        if (!best) {
+        if (!tipoLabel) {
+            return { ok:false, msg:"No encontré label Tipo de permiso de trabajo" };
+        }
+
+        const lr = tipoLabel.getBoundingClientRect();
+
+        const triggers = Array.from(document.querySelectorAll("img.x-form-arrow-trigger"))
+            .filter(t => t.offsetParent)
+            .map(t => {
+                const r = t.getBoundingClientRect();
+                return {
+                    el: t,
+                    x: Math.round(r.x),
+                    y: Math.round(r.y),
+                    cx: r.x + r.width / 2,
+                    cy: r.y + r.height / 2
+                };
+            })
+            .sort((a,b) => a.y - b.y);
+
+        let tipoTrigger = null;
+        let bestDy = 999999;
+
+        for (const t of triggers) {
+            const dy = Math.abs(t.cy - (lr.y + lr.height / 2));
+            if (t.x > lr.x && dy < bestDy) {
+                bestDy = dy;
+                tipoTrigger = t;
+            }
+        }
+
+        if (!tipoTrigger) {
             return {
                 ok:false,
-                msg:"trigger Estado no encontrado",
+                msg:"No encontré trigger de Tipo",
                 labelY: Math.round(lr.y),
-                triggers: triggers.map(t => {
-                    const r = t.getBoundingClientRect();
-                    return {x:Math.round(r.x), y:Math.round(r.y)};
-                })
+                triggers: triggers.map(t => ({x:t.x, y:t.y}))
             };
         }
 
-        best.click();
+        const candidatosEstado = triggers.filter(t =>
+            t.x >= tipoTrigger.x - 10 &&
+            t.x <= tipoTrigger.x + 40 &&
+            t.y > tipoTrigger.y + 5
+        );
 
-        const br = best.getBoundingClientRect();
+        if (!candidatosEstado.length) {
+            return {
+                ok:false,
+                msg:"No encontré trigger bajo Tipo para Estado",
+                tipoTrigger:{x:tipoTrigger.x,y:tipoTrigger.y},
+                triggers: triggers.map(t => ({x:t.x, y:t.y}))
+            };
+        }
+
+        const estadoTrigger = candidatosEstado[0];
+
+        estadoTrigger.el.click();
 
         return {
             ok:true,
-            x:Math.round(br.x),
-            y:Math.round(br.y),
-            labelY:Math.round(lr.y),
-            score:Math.round(bestScore)
+            metodo:"trigger bajo Tipo",
+            tipoTrigger:{x:tipoTrigger.x,y:tipoTrigger.y},
+            estadoTrigger:{x:estadoTrigger.x,y:estadoTrigger.y},
+            triggers: triggers.map(t => ({x:t.x, y:t.y}))
         };
     }
     """)
@@ -415,7 +437,6 @@ async def aplicar_filtro_pcct(page, frame):
     if not r_trigger.get("ok"):
         raise RuntimeError(f"No se pudo abrir combo Estado: {r_trigger}")
 
-    # Seleccionar EXACTAMENTE Revisión y Autorización PCCT
     r_pcct = await frame.evaluate("""
     () => {
         const objetivo = "Revisión y Autorización PCCT";
@@ -446,48 +467,6 @@ async def aplicar_filtro_pcct(page, frame):
     if not r_pcct.get("ok"):
         raise RuntimeError(f"No se pudo seleccionar Estado PCCT. Opciones visibles: {r_pcct}")
 
-    # Validar que el input Estado quedó con PCCT
-    validacion = await frame.evaluate("""
-    () => {
-        const labels = Array.from(document.querySelectorAll("label,td,div,span,b"))
-            .filter(el => el.offsetParent && (el.innerText || "").trim() === "Estado:");
-
-        if (!labels.length) return {ok:false, msg:"label Estado no encontrado"};
-
-        const lr = labels[0].getBoundingClientRect();
-
-        const inputs = Array.from(document.querySelectorAll("input.x-form-text, input"))
-            .filter(i => i.offsetParent);
-
-        let best = null;
-        let bestDy = 999999;
-
-        for (const inp of inputs) {
-            const r = inp.getBoundingClientRect();
-            const dy = Math.abs((r.y + r.height / 2) - (lr.y + lr.height / 2));
-
-            if (r.x > lr.x && dy < bestDy) {
-                best = inp;
-                bestDy = dy;
-            }
-        }
-
-        if (!best) return {ok:false, msg:"input Estado no encontrado"};
-
-        return {
-            ok: (best.value || "").trim() === "Revisión y Autorización PCCT",
-            value: (best.value || "").trim(),
-            dy: Math.round(bestDy)
-        };
-    }
-    """)
-
-    print(f"  validación Estado: {validacion}")
-
-    if not validacion.get("ok"):
-        raise RuntimeError(f"Estado no quedó seleccionado correctamente: {validacion}")
-
-    # Click en Aplicar
     r_aplicar = await frame.evaluate("""
     () => {
         const els = Array.from(document.querySelectorAll("a,button,span,td"))
@@ -495,7 +474,6 @@ async def aplicar_filtro_pcct(page, frame):
 
         for (const el of els) {
             const t = (el.innerText || el.textContent || "").trim();
-
             if (t === "Aplicar") {
                 el.click();
                 return {ok:true};
@@ -532,7 +510,7 @@ async def aplicar_filtro_pcct(page, frame):
     """)
 
     print(f"  resultado filtro: {info}")
-    
+
 # ─── APROBAR PTs ──────────────────────────────────────────────────────────────
 
 async def aprobar_pts(page, frame):
