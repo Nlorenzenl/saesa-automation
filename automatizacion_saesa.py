@@ -31,7 +31,7 @@ AREA_KEYWORDS = ["metropolitana"]
 
 
 # =============================================================================
-# HELPERS JS
+# JS HELPERS
 # =============================================================================
 
 JS_READ_ROWS = """
@@ -60,7 +60,10 @@ JS_GET_TOTAL_PAGES = """
 JS_NEXT_PAGE = """
 () => {
     var btn = document.querySelector(".x-tbar-page-next:not(.x-item-disabled)");
-    if (btn) { btn.click(); return true; }
+    if (btn) {
+        btn.click();
+        return true;
+    }
     return false;
 }
 """
@@ -68,7 +71,10 @@ JS_NEXT_PAGE = """
 JS_REFRESH_GRID = """
 () => {
     var btn = document.querySelector(".x-tbar-loading");
-    if (btn) { btn.click(); return true; }
+    if (btn) {
+        btn.click();
+        return true;
+    }
     return false;
 }
 """
@@ -81,10 +87,17 @@ JS_CHECK_BTN_APROBAR = """
         if (!el.offsetParent) continue;
         var txt = (el.innerText || el.textContent || "").trim();
         if (txt !== "Aprobar") continue;
+
         var disabled = el.classList.contains("x-item-disabled") ||
                        !!(el.closest && el.closest(".x-item-disabled"));
-        return {found: true, disabled: disabled, cls: String(el.className).substring(0, 100)};
+
+        return {
+            found: true,
+            disabled: disabled,
+            cls: String(el.className).substring(0, 100)
+        };
     }
+
     return {found: false};
 }
 """
@@ -95,13 +108,22 @@ JS_CLICK_BTN_APROBAR = """
     for (var i = 0; i < candidatos.length; i++) {
         var el = candidatos[i];
         if (!el.offsetParent) continue;
+
         var txt = (el.innerText || el.textContent || "").trim();
+
         if (txt !== "Aprobar") continue;
         if (el.classList.contains("x-item-disabled")) continue;
         if (el.closest && el.closest(".x-item-disabled")) continue;
+
         el.click();
-        return {clicked: true, tag: el.tagName, cls: String(el.className).substring(0,60)};
+
+        return {
+            clicked: true,
+            tag: el.tagName,
+            cls: String(el.className).substring(0, 60)
+        };
     }
+
     return {clicked: false};
 }
 """
@@ -109,14 +131,19 @@ JS_CLICK_BTN_APROBAR = """
 JS_DETECT_POPUP = """
 () => {
     var headers = Array.from(document.querySelectorAll(".x-window-header-text, .x-panel-header-text"));
+
     for (var i = 0; i < headers.length; i++) {
         var h = headers[i];
         if (!h.offsetParent) continue;
+
         var txt = (h.innerText || h.textContent || "").trim();
+
         if (txt === "Aprobar") {
             var win = h.closest(".x-window");
             if (!win || !win.offsetParent) continue;
+
             var r = win.getBoundingClientRect();
+
             return {
                 found: true,
                 x: Math.round(r.x),
@@ -126,6 +153,7 @@ JS_DETECT_POPUP = """
             };
         }
     }
+
     return {found: false};
 }
 """
@@ -133,10 +161,13 @@ JS_DETECT_POPUP = """
 JS_CLICK_ACEPTAR = """
 () => {
     var headers = Array.from(document.querySelectorAll(".x-window-header-text, .x-panel-header-text"));
+
     for (var i = 0; i < headers.length; i++) {
         var h = headers[i];
         if (!h.offsetParent) continue;
+
         var txt = (h.innerText || h.textContent || "").trim();
+
         if (txt !== "Aprobar") continue;
 
         var win = h.closest(".x-window");
@@ -150,8 +181,10 @@ JS_CLICK_ACEPTAR = """
         }
 
         var btns = Array.from(win.querySelectorAll("button"));
+
         for (var j = 0; j < btns.length; j++) {
             var btxt = (btns[j].innerText || btns[j].textContent || "").trim();
+
             if (btxt === "Aceptar") {
                 btns[j].click();
                 return {ok: true, via: "button"};
@@ -159,8 +192,10 @@ JS_CLICK_ACEPTAR = """
         }
 
         var xbtns = Array.from(win.querySelectorAll(".x-btn"));
+
         for (var k = 0; k < xbtns.length; k++) {
             var xbtxt = (xbtns[k].innerText || xbtns[k].textContent || "").trim();
+
             if (xbtxt === "Aceptar") {
                 xbtns[k].click();
                 return {ok: true, via: "x-btn"};
@@ -169,6 +204,7 @@ JS_CLICK_ACEPTAR = """
 
         return {ok: false, win_found: true};
     }
+
     return {ok: false, win_found: false};
 }
 """
@@ -176,22 +212,29 @@ JS_CLICK_ACEPTAR = """
 JS_PT_EXISTE = """
 (ptId) => {
     var cells = Array.from(document.querySelectorAll(".x-grid3-cell-inner"));
-    return cells.some(function(c) { return c.innerText.trim() === ptId; });
+    return cells.some(function(c) {
+        return c.innerText.trim() === ptId;
+    });
 }
 """
 
 
 # =============================================================================
-# UTILIDADES
+# UTILS
 # =============================================================================
 
 async def screenshot(page, nombre):
     os.makedirs("capturas", exist_ok=True)
+
     ts = datetime.now().strftime("%H%M%S")
     safe = re.sub(r"[^a-zA-Z0-9_-]", "_", nombre)
+
     path = f"capturas/{safe}_{ts}.png"
+
     await page.screenshot(path=path, full_page=False)
+
     print(f"    captura: {path}")
+
     return path
 
 
@@ -201,6 +244,11 @@ def normalizar(txt):
 
 def es_metropolitana(area):
     return any(k in (area or "").lower() for k in AREA_KEYWORDS)
+
+
+def es_estado_pcct_exacto(estado):
+    e = normalizar(estado)
+    return e == ESTADO_EXACTO
 
 
 def extraer_info_fila(row):
@@ -281,12 +329,15 @@ async def navegar_a_permisos(page):
         'a:has-text("Aplicaciones"), span:has-text("Aplicaciones")',
         timeout=TIMEOUT,
     )
+
     await page.click('a:has-text("Aplicaciones"), span:has-text("Aplicaciones")')
     await page.wait_for_timeout(1500)
+
     print("  -> Aplicaciones")
 
     await page.wait_for_selector('a:has-text("DMS")', timeout=TIMEOUT)
     await page.click('a:has-text("DMS")')
+
     await page.wait_for_load_state("networkidle", timeout=30_000)
     await page.wait_for_timeout(3000)
 
@@ -307,6 +358,7 @@ async def navegar_a_permisos(page):
                 frame = f
                 print(f"  frame detectado por selector: {f.name}")
                 break
+
         except Exception:
             pass
 
@@ -319,6 +371,7 @@ async def navegar_a_permisos(page):
 
     await frame.wait_for_selector('text="Permisos de trabajo"', timeout=TIMEOUT)
     await frame.click('text="Permisos de trabajo"')
+
     await page.wait_for_load_state("networkidle", timeout=30_000)
     await page.wait_for_timeout(3500)
 
@@ -344,7 +397,9 @@ async def aplicar_filtro_pcct(page, frame):
         const win = Array.from(document.querySelectorAll(".x-window"))
             .filter(w => w.offsetParent && (w.innerText || "").includes("Filtros"))[0];
 
-        if (!win) return { ok:false, msg:"No encontré ventana Filtros" };
+        if (!win) {
+            return { ok:false, msg:"No encontré ventana Filtros" };
+        }
 
         const labels = Array.from(win.querySelectorAll("label,td,div,span,b"))
             .filter(el => el.offsetParent);
@@ -353,13 +408,16 @@ async def aplicar_filtro_pcct(page, frame):
 
         for (const el of labels) {
             const txt = (el.innerText || "").trim();
+
             if (txt === "Estado:") {
                 estadoLabel = el;
                 break;
             }
         }
 
-        if (!estadoLabel) return { ok:false, msg:"No encontré label Estado:" };
+        if (!estadoLabel) {
+            return { ok:false, msg:"No encontré label Estado:" };
+        }
 
         const lr = estadoLabel.getBoundingClientRect();
         const wr = win.getBoundingClientRect();
@@ -370,7 +428,12 @@ async def aplicar_filtro_pcct(page, frame):
         const el = document.elementFromPoint(x, y);
 
         if (!el) {
-            return { ok:false, msg:"elementFromPoint no encontró elemento", x:Math.round(x), y:Math.round(y) };
+            return {
+                ok:false,
+                msg:"elementFromPoint no encontró elemento",
+                x:Math.round(x),
+                y:Math.round(y)
+            };
         }
 
         el.click();
@@ -436,43 +499,40 @@ async def aplicar_filtro_pcct(page, frame):
     """)
 
     print(f"  selección PCCT: {r_pcct}")
+
     await page.wait_for_timeout(700)
     await screenshot(page, "filtro_03_pcct_seleccionado")
 
     if not r_pcct.get("ok"):
         raise RuntimeError(f"No se pudo seleccionar Estado PCCT. Opciones visibles: {r_pcct}")
 
-    r_aplicar = await frame.evaluate("""
+    print("  Aplicar con click real Playwright")
+
+    aplicar = frame.locator(".x-window", has_text="Filtros").locator("text=Aplicar").first()
+    await aplicar.click(timeout=5000, force=True)
+
+    await page.wait_for_timeout(6000)
+    await screenshot(page, "filtro_04_aplicado")
+
+    sigue_abierto = await frame.evaluate("""
     () => {
         const win = Array.from(document.querySelectorAll(".x-window"))
             .filter(w => w.offsetParent && (w.innerText || "").includes("Filtros"))[0];
 
-        if (!win) return {ok:false, msg:"No encontré ventana Filtros"};
-
-        const els = Array.from(win.querySelectorAll("a,button,span,td"))
-            .filter(el => el.offsetParent);
-
-        for (const el of els) {
-            const t = (el.innerText || el.textContent || "").trim();
-
-            if (t === "Aplicar") {
-                el.click();
-                return {ok:true};
-            }
-        }
-
-        return {ok:false, msg:"No encontré Aplicar"};
+        return !!win;
     }
     """)
 
-    print(f"  Aplicar: {r_aplicar}")
+    if sigue_abierto:
+        print("  Filtro sigue abierto, segundo click en Aplicar")
 
-    if not r_aplicar.get("ok"):
-        raise RuntimeError(f"No se pudo presionar Aplicar: {r_aplicar}")
+        await frame.locator(".x-window", has_text="Filtros").locator("text=Aplicar").first().click(
+            timeout=5000,
+            force=True,
+        )
 
-    await page.wait_for_load_state("networkidle", timeout=30_000)
-    await page.wait_for_timeout(3500)
-    await screenshot(page, "filtro_04_aplicado")
+        await page.wait_for_timeout(6000)
+        await screenshot(page, "filtro_04_aplicado_retry")
 
     info = await frame.evaluate("""
     () => {
@@ -486,7 +546,10 @@ async def aplicar_filtro_pcct(page, frame):
             )
             .map(e => e.innerText.trim());
 
-        return {filas_visibles: rows.length, paginador: pagText};
+        return {
+            filas_visibles: rows.length,
+            paginador: pagText
+        };
     }
     """)
 
@@ -514,7 +577,11 @@ async def seleccionar_fila_pt(page, frame, pt_id):
         return {"found": True, "selected": True}
 
     except Exception as e:
-        return {"found": False, "selected": False, "error": str(e)}
+        return {
+            "found": False,
+            "selected": False,
+            "error": str(e)
+        }
 
 
 # =============================================================================
@@ -538,6 +605,8 @@ async def aprobar_pts(page, frame):
     for pagina in range(1, paginas + 1):
         print(f"\\n  ── Página {pagina}/{paginas} ──")
 
+        await page.wait_for_timeout(1500)
+
         filas = await frame.evaluate(JS_READ_ROWS)
         print(f"  Filas leídas: {len(filas)}")
 
@@ -552,12 +621,13 @@ async def aprobar_pts(page, frame):
             if not id_pt:
                 continue
 
-            if estado_pt.strip() != ESTADO_EXACTO:
+            if not es_estado_pcct_exacto(estado_pt):
                 pts_omitidos.append({
                     "id": id_pt,
                     "area": area_pt or "Sin área detectada",
                     "motivo": f"Estado no corresponde: {estado_pt or 'Sin estado detectado'}"
                 })
+
                 print(f"    [OMITIR ESTADO] {id_pt} | {estado_pt}")
                 continue
 
@@ -567,13 +637,16 @@ async def aprobar_pts(page, frame):
                     "area": area_pt,
                     "estado": estado_pt
                 })
+
                 print(f"    [APROBAR] {id_pt} | {area_pt} | {estado_pt}")
+
             else:
                 pts_omitidos.append({
                     "id": id_pt,
                     "area": area_pt or "Sin área detectada",
                     "motivo": "Área no Metropolitana"
                 })
+
                 print(f"    [OMITIR AREA] {id_pt} | {area_pt}")
 
         for pt in pts_esta_pagina:
@@ -586,12 +659,14 @@ async def aprobar_pts(page, frame):
             try:
                 if DRY_RUN:
                     print(f"    [DRY RUN] {pt['id']} NO fue aprobado realmente")
+
                     pts_aprobados.append({
                         "id": pt["id"],
                         "area": pt["area"],
                         "estado": pt["estado"],
                         "modo": "SIMULADO"
                     })
+
                     continue
 
                 sel = await seleccionar_fila_pt(page, frame, pt["id"])
@@ -642,6 +717,7 @@ async def aprobar_pts(page, frame):
 
                 for intento in range(14):
                     await page.wait_for_timeout(500)
+
                     popup = await frame.evaluate(JS_DETECT_POPUP)
 
                     if popup.get("found"):
@@ -662,8 +738,7 @@ async def aprobar_pts(page, frame):
                     await screenshot(page, f"err_aceptar_{pt['id']}")
                     continue
 
-                await page.wait_for_load_state("networkidle", timeout=20_000)
-                await page.wait_for_timeout(2500)
+                await page.wait_for_timeout(3500)
 
                 refresh = await frame.evaluate(JS_REFRESH_GRID)
                 print(f"    refresh grilla: {refresh}")
@@ -689,9 +764,16 @@ async def aprobar_pts(page, frame):
 
             except Exception as e:
                 msg = str(e)[:250]
+
                 pts_fallidos.append(f"{pt['id']} - {msg}")
+
                 print(f"    EXCEPCIÓN: {msg}")
+
                 await screenshot(page, f"exc_{pt['id']}")
+
+        if len(pts_aprobados) >= MAX_APROBACIONES:
+            print("  LÍMITE DE SEGURIDAD ALCANZADO")
+            break
 
         if pagina < paginas:
             sig = await frame.evaluate(JS_NEXT_PAGE)
@@ -700,10 +782,10 @@ async def aprobar_pts(page, frame):
                 print("  No hay más páginas")
                 break
 
-            await page.wait_for_load_state("networkidle", timeout=15_000)
-            await page.wait_for_timeout(3000)
+            await page.wait_for_timeout(4000)
 
     await screenshot(page, "final")
+
     return pts_aprobados, pts_fallidos, pts_omitidos
 
 
@@ -723,6 +805,7 @@ def enviar_reporte(pts_aprobados, pts_fallidos, pts_omitidos, error_critico=None
 
         for pt in pts_aprobados:
             etiqueta = pt.get("modo", "")
+
             html += (
                 "<tr>"
                 "<td style='padding:4px 8px;color:#006600;font-size:16px'>&#10003;</td>"
@@ -872,12 +955,16 @@ async def main():
 
         try:
             await hacer_login(page)
+
             frame = await navegar_a_permisos(page)
+
             await aplicar_filtro_pcct(page, frame)
+
             pts_aprobados, pts_fallidos, pts_omitidos = await aprobar_pts(page, frame)
 
         except Exception as e:
             error_critico = str(e)
+
             print(f"\\nERROR CRÍTICO: {e}")
 
             try:
@@ -892,7 +979,12 @@ async def main():
     print(f"  {len(pts_aprobados)} aprobados | {len(pts_fallidos)} errores | {len(pts_omitidos)} omitidos")
     print(f"{sep}")
 
-    enviar_reporte(pts_aprobados, pts_fallidos, pts_omitidos, error_critico)
+    enviar_reporte(
+        pts_aprobados,
+        pts_fallidos,
+        pts_omitidos,
+        error_critico,
+    )
 
     print("Fin.\\n")
 
