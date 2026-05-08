@@ -386,7 +386,7 @@ async def navegar_a_permisos(page):
 # =============================================================================
 
 async def aplicar_filtro_pcct(page, frame):
-    print("\\n[3] FILTRO")
+    print("\n[3] FILTRO")
 
     await frame.click('text=Filtro')
     await page.wait_for_timeout(2000)
@@ -397,9 +397,7 @@ async def aplicar_filtro_pcct(page, frame):
         const win = Array.from(document.querySelectorAll(".x-window"))
             .filter(w => w.offsetParent && (w.innerText || "").includes("Filtros"))[0];
 
-        if (!win) {
-            return { ok:false, msg:"No encontré ventana Filtros" };
-        }
+        if (!win) return { ok:false, msg:"No encontré ventana Filtros" };
 
         const labels = Array.from(win.querySelectorAll("label,td,div,span,b"))
             .filter(el => el.offsetParent);
@@ -415,9 +413,7 @@ async def aplicar_filtro_pcct(page, frame):
             }
         }
 
-        if (!estadoLabel) {
-            return { ok:false, msg:"No encontré label Estado:" };
-        }
+        if (!estadoLabel) return { ok:false, msg:"No encontré label Estado:" };
 
         const lr = estadoLabel.getBoundingClientRect();
         const wr = win.getBoundingClientRect();
@@ -506,44 +502,85 @@ async def aplicar_filtro_pcct(page, frame):
     if not r_pcct.get("ok"):
         raise RuntimeError(f"No se pudo seleccionar Estado PCCT. Opciones visibles: {r_pcct}")
 
-    print("  Aplicar con JS directo dentro de ventana Filtros")
+    print("  Aplicar botón real inferior")
 
     r_aplicar = await frame.evaluate("""
     () => {
         const win = Array.from(document.querySelectorAll(".x-window"))
             .filter(w => w.offsetParent && (w.innerText || "").includes("Filtros"))[0];
 
-        if (!win) return {ok:false, msg:"No encontré ventana Filtros"};
+        if (!win) return { ok:false, msg:"No encontré ventana Filtros" };
 
-        const candidatos = Array.from(win.querySelectorAll("a,button,span,td,div"))
+        // Forzar commit del combo Estado
+        const inputs = Array.from(win.querySelectorAll("input"))
+            .filter(i => i.offsetParent);
+
+        for (const inp of inputs) {
+            if ((inp.value || "").trim() === "Revisión y Autorización PCCT") {
+                inp.focus();
+                inp.dispatchEvent(new Event("input", { bubbles:true }));
+                inp.dispatchEvent(new Event("change", { bubbles:true }));
+                inp.dispatchEvent(new Event("blur", { bubbles:true }));
+            }
+        }
+
+        const wr = win.getBoundingClientRect();
+
+        // Buscar el botón inferior "Aplicar", no el texto de toolbar
+        const candidatos = Array.from(win.querySelectorAll("*"))
             .filter(el => el.offsetParent);
-        
-        for (const el of candidatos) {
-            const t = (el.innerText || el.textContent || "").trim();
 
-            if (t === "Aplicar") {
+        for (const el of candidatos) {
+            const txt = (el.innerText || el.textContent || "").trim();
+            const r = el.getBoundingClientRect();
+
+            if (
+                txt === "Aplicar" &&
+                r.y > wr.bottom - 80 &&
+                r.x < wr.left + 120
+            ) {
                 el.click();
+
                 return {
                     ok:true,
+                    metodo:"boton inferior por texto",
                     tag:el.tagName,
-                    cls:String(el.className || "")
+                    cls:String(el.className || ""),
+                    x:Math.round(r.x),
+                    y:Math.round(r.y)
                 };
             }
         }
 
-        return {ok:false, msg:"No encontré botón Aplicar"};
+        // Fallback: click coordenada exacta del botón verde inferior izquierdo
+        const x = wr.left + 35;
+        const y = wr.bottom - 20;
+        const el = document.elementFromPoint(x, y);
 
+        if (el) {
+            el.click();
+
+            return {
+                ok:true,
+                metodo:"coordenada inferior izquierda",
+                tag:el.tagName,
+                cls:String(el.className || ""),
+                x:Math.round(x),
+                y:Math.round(y)
+            };
+        }
+
+        return { ok:false, msg:"No se pudo hacer click en Aplicar" };
     }
-
     """)
+
     print(f"  Aplicar: {r_aplicar}")
 
     if not r_aplicar.get("ok"):
         raise RuntimeError(f"No se pudo presionar Aplicar: {r_aplicar}")
 
-    await page.wait_for_timeout(6000)
+    await page.wait_for_timeout(8000)
     await screenshot(page, "filtro_04_aplicado")
-
 
     info = await frame.evaluate("""
     () => {
@@ -566,6 +603,7 @@ async def aplicar_filtro_pcct(page, frame):
 
     print(f"  resultado filtro: {info}")
 
+    return info
 
 # =============================================================================
 # SELECCIÓN REAL DE FILA
