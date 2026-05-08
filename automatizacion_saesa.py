@@ -392,6 +392,7 @@ async def aplicar_filtro_pcct(page, frame):
     await page.wait_for_timeout(2000)
     await screenshot(page, "filtro_01_abierto")
 
+    # Abrir combo Estado
     r_estado = await frame.evaluate("""
     () => {
         const win = Array.from(document.querySelectorAll(".x-window"))
@@ -454,6 +455,7 @@ async def aplicar_filtro_pcct(page, frame):
     await page.wait_for_timeout(1500)
     await screenshot(page, "filtro_02_dropdown_estado")
 
+    # Seleccionar Revisión y Autorización PCCT
     r_pcct = await frame.evaluate("""
     () => {
         const objetivo = "Revisión y Autorización PCCT";
@@ -502,21 +504,46 @@ async def aplicar_filtro_pcct(page, frame):
     if not r_pcct.get("ok"):
         raise RuntimeError(f"No se pudo seleccionar Estado PCCT. Opciones visibles: {r_pcct}")
 
-    print("  Aplicar con mouse real por coordenada")
+    # Click real sobre botón verde Aplicar
+    print("  Aplicar con mouse real al botón verde")
 
     coords_aplicar = await frame.evaluate("""
     () => {
         const win = Array.from(document.querySelectorAll(".x-window"))
             .filter(w => w.offsetParent && (w.innerText || "").includes("Filtros"))[0];
 
-        if (!win) return { ok:false, msg:"No encontré ventana Filtros" };
+        if (!win) {
+            return { ok:false, msg:"No encontré ventana Filtros" };
+        }
 
         const wr = win.getBoundingClientRect();
 
+        const botones = Array.from(
+            win.querySelectorAll(".x-btn-text, button, .x-btn-center button")
+        ).filter(el => el.offsetParent);
+
+        for (const b of botones) {
+            const txt = (b.innerText || b.textContent || "").trim();
+
+            if (txt === "Aplicar") {
+                const r = b.getBoundingClientRect();
+
+                return {
+                    ok:true,
+                    metodo:"boton real detectado",
+                    x: Math.round(r.left + r.width / 2),
+                    y: Math.round(r.top + r.height / 2),
+                    tag:b.tagName,
+                    cls:String(b.className || "")
+                };
+            }
+        }
+
         return {
             ok:true,
-            x: Math.round(wr.left + 28),
-            y: Math.round(wr.bottom - 18),
+            metodo:"fallback",
+            x: Math.round(wr.left + 65),
+            y: Math.round(wr.bottom - 42),
             winLeft: Math.round(wr.left),
             winBottom: Math.round(wr.bottom)
         };
@@ -528,7 +555,13 @@ async def aplicar_filtro_pcct(page, frame):
     if not coords_aplicar.get("ok"):
         raise RuntimeError(f"No se pudo calcular coordenada Aplicar: {coords_aplicar}")
 
-    await page.mouse.click(coords_aplicar["x"], coords_aplicar["y"])
+    await page.mouse.move(coords_aplicar["x"], coords_aplicar["y"])
+    await page.wait_for_timeout(500)
+
+    await page.mouse.down()
+    await page.wait_for_timeout(150)
+    await page.mouse.up()
+
     await page.wait_for_timeout(8000)
     await screenshot(page, "filtro_04_aplicado")
 
@@ -543,7 +576,15 @@ async def aplicar_filtro_pcct(page, frame):
     print(f"  filtro sigue abierto: {filtro_sigue_abierto}")
 
     if filtro_sigue_abierto:
-        await page.mouse.click(coords_aplicar["x"], coords_aplicar["y"])
+        print("  Retry click botón Aplicar")
+
+        await page.mouse.move(coords_aplicar["x"], coords_aplicar["y"])
+        await page.wait_for_timeout(500)
+
+        await page.mouse.down()
+        await page.wait_for_timeout(150)
+        await page.mouse.up()
+
         await page.wait_for_timeout(8000)
         await screenshot(page, "filtro_04_aplicado_retry")
 
@@ -569,7 +610,7 @@ async def aplicar_filtro_pcct(page, frame):
     print(f"  resultado filtro: {info}")
 
     return info
-    
+
 # =============================================================================
 # SELECCIÓN REAL DE FILA
 # =============================================================================
