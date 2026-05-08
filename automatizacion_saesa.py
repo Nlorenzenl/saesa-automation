@@ -344,7 +344,7 @@ async def aplicar_filtro_pcct(page, frame):
     await frame.click('text=Filtro')
     await asyncio.sleep(2)
 
-    await frame.screenshot(path=f"capturas/filtro_01_abierto_{ts()}.png")
+    await screenshot(page, "filtro_01_abierto")
 
     # abrir combo ESTADO
     r_estado = await frame.evaluate("""
@@ -424,7 +424,7 @@ async def aplicar_filtro_pcct(page, frame):
 
     await asyncio.sleep(1.5)
 
-    await frame.screenshot(path=f"capturas/filtro_02_dropdown_estado_{ts()}.png")
+    await screenshot(page, "filtro_02_dropdown_estado")
 
     # seleccionar REVISION Y AUTORIZACION PCCT
     r_pcct = await frame.evaluate("""
@@ -478,7 +478,7 @@ async def aplicar_filtro_pcct(page, frame):
 
     print(f"  selección PCCT: {r_pcct}")
 
-    await frame.screenshot(path=f"capturas/filtro_03_pcct_seleccionado_{ts()}.png")
+    await screenshot(page, "filtro_03_pcct_seleccionado")
 
     if not r_pcct.get("ok"):
         raise Exception(
@@ -493,7 +493,7 @@ async def aplicar_filtro_pcct(page, frame):
 
     await asyncio.sleep(4)
 
-    await frame.screenshot(path=f"capturas/filtro_04_aplicado_{ts()}.png")
+    await screenshot(page, "filtro_04_aplicado")
 
     return True
 
