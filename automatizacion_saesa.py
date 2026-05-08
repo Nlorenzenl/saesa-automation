@@ -337,7 +337,7 @@ async def navegar_a_permisos(page):
 
 # ─── FILTRO PCCT ──────────────────────────────────────────────────────────────
 
-async def aplicar_filtro_pcct(frame):
+async def aplicar_filtro_pcct(page, frame):
     print("\\n[3] FILTRO")
 
     # abrir filtro
