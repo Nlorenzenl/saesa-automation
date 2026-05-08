@@ -171,7 +171,7 @@ async def get_content_frame(page):
             return f
     for f in page.frames:
         try:
-            await f.wait_for_selector("text=Planificacion", timeout=2000)
+            await f.wait_for_selector("text=Planificación", timeout=2000)
             return f
         except Exception:
             continue
@@ -209,7 +209,7 @@ async def navegar_a_permisos(page):
     await page.wait_for_timeout(2000)
     frame = await get_content_frame(page)
     print("  frame: " + frame.name)
-    await frame.click("text=Planificacion")
+    await frame.click("text=Planificación")
     await page.wait_for_timeout(1000)
     await frame.click("text=Permisos de trabajo")
     await page.wait_for_load_state("networkidle", timeout=30_000)
