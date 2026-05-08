@@ -93,24 +93,24 @@ async def aplicar_filtro_estado(page, frame):
     # El trigger de Estado está en x=838, y=547 (confirmado por logs anteriores)
     # El label "Estado:" está en y=547 y su trigger arrow está en esa misma fila
     # Necesitamos hacer clic específicamente en el arrow trigger de y≈547
-    click_result = await frame.evaluate(f'''() => {{
+    click_result = await frame.evaluate('''() => {
         // Buscar TODOS los triggers y filtrar el que está en y≈547
         const triggers = Array.from(document.querySelectorAll("img.x-form-arrow-trigger, img.x-form-trigger"));
         const log = [];
 
-        for (const t of triggers) {{
+        for (const t of triggers) {
             if (!t.offsetParent) continue;
             const r = t.getBoundingClientRect();
             const y = Math.round(r.y);
             const x = Math.round(r.x);
-            log.push(`trigger en (${x}, ${y}) cls=${t.className}`);
+            log.push("trigger en (" + x + ", " + y + ") cls=" + t.className);
 
-            // El trigger de Estado está en y=547 ± 5px
-            if (y >= 542 && y <= 552 && x > 800) {{
+            // El trigger de Estado está en y=547 +/- 5px
+            if (y >= 542 && y <= 552 && x > 800) {
                 t.click();
-                return {{ok: true, x, y, cls: t.className, log}};
-            }}
-        }}
+                return {ok: true, x: x, y: y, cls: t.className, log: log};
+            }
+        }
 
         // Si no encontramos en y=547, intentar buscar por la posición del label "Estado:"
         const allEls = Array.from(document.querySelectorAll("*"));
@@ -213,7 +213,7 @@ async def aprobar_pts(page, frame):
         for (const el of all) {
             if (!el.offsetParent || el.children.length > 2) continue;
             const t = (el.innerText || "").trim();
-            if (/^de \d+$/.test(t)) return parseInt(t.replace("de ", ""));
+            if (/^de [0-9]+$/.test(t)) return parseInt(t.replace("de ", ""));
         }
         return 1;
     }''')
