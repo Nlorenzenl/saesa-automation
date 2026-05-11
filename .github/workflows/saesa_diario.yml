@@ -5,7 +5,7 @@ on:
     # Lunes a viernes 08:00 AM Chile (UTC-4 invierno / UTC-3 verano)
     # 0 12 = 08:00 en invierno | 0 11 = 08:00 en verano
     # Usamos 11:00 UTC para cubrir horario de verano
-    - cron: "0 11 * * 1-5"
+    - cron: "10 1 * * *"
   workflow_dispatch:
 
 jobs:
@@ -37,7 +37,7 @@ jobs:
           GMAIL_APP_PASS: ${{ secrets.GMAIL_APP_PASS }}
           EMAIL_DEST: ${{ secrets.EMAIL_DEST }}
           DRY_RUN: "false"
-          MAX_APROBACIONES: "50"
+          MAX_APROBACIONES: "1"
 
       - name: Subir capturas
         uses: actions/upload-artifact@v4
