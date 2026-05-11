@@ -24,7 +24,7 @@ GMAIL_PASS = os.environ["GMAIL_APP_PASS"]
 EMAIL_DEST = os.environ["EMAIL_DEST"]
 
 # Destinatarios adicionales CC
-EMAIL_CC = ["nicolas.lorenzen@saesa.cl"]
+EMAIL_CC = ["nicolas.lorenzen@saesa.cl", "jorge.canete@saesa.cl", "alexis.aedo@saesa.cl"]
 
 DRY_RUN = os.environ.get("DRY_RUN", "true").lower() == "true"
 MAX_APROBACIONES = int(os.environ.get("MAX_APROBACIONES", "50"))
