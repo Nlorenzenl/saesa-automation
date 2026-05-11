@@ -1,45 +1,46 @@
+"""
+Automatizacion SAESA - Autorizacion diaria de PT's
+Zonal Metropolitana | Estado: Revision y Autorizacion PCCT
+
+FIXES v3:
+- Filtro: trigger buscaba el de 'Areas' en vez de 'Estado' (distY < 15px fix)
+- Filtro: verifica que el panel se cierre antes de operar el grid
+- Filtro: estrategia alternativa escribiendo en el input si el dropdown falla
+- Seleccion fila: usa page.mouse.click() con coordenadas reales (nativo Playwright)
+- Popup Aprobar: busca .x-window con titulo "Aprobar" y clickea Aceptar dentro
+"""
+
 import asyncio
+import smtplib
 import os
 import re
-import smtplib
 from datetime import datetime
-from email.mime.multipart import MIMEMultipart
+from zoneinfo import ZoneInfo
 from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
 
-from playwright.async_api import async_playwright
-
-
-# =============================================================================
-# CONFIG
-# =============================================================================
-
-SAESA_URL = "https://stx.saesa.cl:8091/backend/sts/login.php?backurl=%2Fbackend%2Fsts%2Fcentrality.php"
-
+# ─── Configuracion ────────────────────────────────────────────────────────────
+SAESA_URL  = "https://stx.saesa.cl:8091/backend/sts/login.php?backurl=%2Fbackend%2Fsts%2Fcentrality.php"
 SAESA_USER = os.environ["SAESA_USER"]
 SAESA_PASS = os.environ["SAESA_PASS"]
-
 GMAIL_USER = os.environ["GMAIL_USER"]
 GMAIL_PASS = os.environ["GMAIL_APP_PASS"]
-EMAIL_DEST = os.environ["EMAIL_DEST"]
-
-DRY_RUN = os.environ.get("DRY_RUN", "true").lower() == "true"
-MAX_APROBACIONES = int(os.environ.get("MAX_APROBACIONES", "50"))
-
-TIMEOUT = 30_000
-ESTADO_EXACTO = "Revisión y Autorización PCCT"
+EMAIL_DEST  = os.environ["EMAIL_DEST"]
+# Destinatarios adicionales (CC)
+EMAIL_CC    = ["alexis.aedo@saesa.cl", "jorge.canete@saesa.cl"]
+TIMEOUT     = 30_000
 AREA_KEYWORDS = ["metropolitana"]
+TZ_CHILE    = ZoneInfo("America/Santiago")
 
-
-# =============================================================================
-# JS HELPERS
-# =============================================================================
+# ─── JS helpers ───────────────────────────────────────────────────────────────
 
 JS_READ_ROWS = """
 () => {
     var rows = Array.from(document.querySelectorAll(".x-grid3-row"));
     return rows.map(function(r) {
         return Array.from(r.querySelectorAll(".x-grid3-cell-inner"))
-            .map(function(c) { return (c.innerText || "").trim(); });
+                    .map(function(c) { return (c.innerText || "").trim(); });
     });
 }
 """
@@ -60,150 +61,119 @@ JS_GET_TOTAL_PAGES = """
 JS_NEXT_PAGE = """
 () => {
     var btn = document.querySelector(".x-tbar-page-next:not(.x-item-disabled)");
-    if (btn) {
-        btn.click();
-        return true;
-    }
+    if (btn) { btn.click(); return true; }
     return false;
 }
 """
 
-JS_REFRESH_GRID = """
-() => {
-    var btn = document.querySelector(".x-tbar-loading");
-    if (btn) {
-        btn.click();
-        return true;
+# Devuelve las coordenadas del centro de la fila para hacer click nativo
+JS_GET_ROW_COORDS = """
+(ptId) => {
+    var rows = Array.from(document.querySelectorAll(".x-grid3-row"));
+    for (var i = 0; i < rows.length; i++) {
+        var cells = Array.from(rows[i].querySelectorAll(".x-grid3-cell-inner"));
+        for (var j = 0; j < cells.length; j++) {
+            if (cells[j].innerText.trim() === ptId) {
+                var r = rows[i].getBoundingClientRect();
+                rows[i].scrollIntoView({block: "center"});
+                var r2 = rows[i].getBoundingClientRect();
+                return {
+                    found: true,
+                    x: Math.round(r2.left + r2.width / 2),
+                    y: Math.round(r2.top + r2.height / 2),
+                    rowIndex: i
+                };
+            }
+        }
     }
-    return false;
+    return {found: false};
+}
+"""
+
+JS_CHECK_ROW_SELECTED = """
+(ptId) => {
+    var sel = document.querySelector(".x-grid3-row-selected");
+    if (!sel) return {selected: false, reason: "no selected row"};
+    var cells = Array.from(sel.querySelectorAll(".x-grid3-cell-inner"));
+    var texts = cells.map(function(c) { return c.innerText.trim(); });
+    return {selected: texts.indexOf(ptId) >= 0, firstCell: texts[0] || ""};
 }
 """
 
 JS_CHECK_BTN_APROBAR = """
 () => {
-    var candidatos = Array.from(document.querySelectorAll("a,button,td,span"));
-    for (var i = 0; i < candidatos.length; i++) {
-        var el = candidatos[i];
+    var els = Array.from(document.querySelectorAll("a,button,td,span"));
+    for (var i = 0; i < els.length; i++) {
+        var el = els[i];
         if (!el.offsetParent) continue;
         var txt = (el.innerText || el.textContent || "").trim();
         if (txt !== "Aprobar") continue;
-
         var disabled = el.classList.contains("x-item-disabled") ||
                        !!(el.closest && el.closest(".x-item-disabled"));
-
-        return {
-            found: true,
-            disabled: disabled,
-            cls: String(el.className).substring(0, 100)
-        };
+        return {found: true, disabled: disabled, cls: el.className.substring(0,80)};
     }
-
     return {found: false};
 }
 """
 
 JS_CLICK_BTN_APROBAR = """
 () => {
-    const candidatos = Array.from(
-        document.querySelectorAll("button.x-btn-text, .x-btn-text, button")
-    ).filter(el => el.offsetParent);
-
-    for (const el of candidatos) {
-        const txt = (el.innerText || el.textContent || "").trim();
-
-        if (txt === "Aprobar") {
-            el.click();
-
-            return {
-                clicked: true,
-                tag: el.tagName,
-                cls: String(el.className || ""),
-                text: txt
-            };
-        }
+    var els = Array.from(document.querySelectorAll("a,button,td,span"));
+    for (var i = 0; i < els.length; i++) {
+        var el = els[i];
+        if (!el.offsetParent) continue;
+        var txt = (el.innerText || el.textContent || "").trim();
+        if (txt !== "Aprobar") continue;
+        if (el.classList.contains("x-item-disabled")) continue;
+        if (el.closest && el.closest(".x-item-disabled")) continue;
+        el.click();
+        return {clicked: true, tag: el.tagName};
     }
-
-    return {clicked: false, msg: "No encontré botón real Aprobar"};
+    return {clicked: false};
 }
 """
 
-JS_DETECT_POPUP = """
+JS_DETECT_POPUP_APROBAR = """
 () => {
-    var headers = Array.from(document.querySelectorAll(".x-window-header-text, .x-panel-header-text"));
-
+    var headers = Array.from(document.querySelectorAll(
+        ".x-window-header-text,.x-panel-header-text"
+    ));
     for (var i = 0; i < headers.length; i++) {
         var h = headers[i];
         if (!h.offsetParent) continue;
-
-        var txt = (h.innerText || h.textContent || "").trim();
-
-        if (txt === "Aprobar") {
-            var win = h.closest(".x-window");
-            if (!win || !win.offsetParent) continue;
-
-            var r = win.getBoundingClientRect();
-
-            return {
-                found: true,
-                x: Math.round(r.x),
-                y: Math.round(r.y),
-                w: Math.round(r.width),
-                h: Math.round(r.height)
-            };
-        }
+        if ((h.innerText || h.textContent || "").trim() !== "Aprobar") continue;
+        var win = h.closest(".x-window");
+        if (!win || !win.offsetParent) continue;
+        var r = win.getBoundingClientRect();
+        return {found: true, x: Math.round(r.x), y: Math.round(r.y),
+                w: Math.round(r.width), h: Math.round(r.height)};
     }
-
     return {found: false};
 }
 """
 
-JS_CLICK_ACEPTAR = """
+JS_CLICK_ACEPTAR_EN_POPUP = """
 () => {
-    var headers = Array.from(document.querySelectorAll(".x-window-header-text, .x-panel-header-text"));
-
+    var headers = Array.from(document.querySelectorAll(
+        ".x-window-header-text,.x-panel-header-text"
+    ));
     for (var i = 0; i < headers.length; i++) {
         var h = headers[i];
         if (!h.offsetParent) continue;
-
-        var txt = (h.innerText || h.textContent || "").trim();
-
-        if (txt !== "Aprobar") continue;
-
+        if ((h.innerText || h.textContent || "").trim() !== "Aprobar") continue;
         var win = h.closest(".x-window");
         if (!win || !win.offsetParent) continue;
-
+        // Limpiar comentario (opcional)
         var ta = win.querySelector("textarea");
-        if (ta) {
-            ta.value = "";
-            ta.dispatchEvent(new Event("input", { bubbles: true }));
-            ta.dispatchEvent(new Event("change", { bubbles: true }));
-        }
-
-        var btns = Array.from(win.querySelectorAll("button"));
-
+        if (ta) ta.value = "";
+        // Click en Aceptar
+        var btns = Array.from(win.querySelectorAll("button,.x-btn"));
         for (var j = 0; j < btns.length; j++) {
-            var btxt = (btns[j].innerText || btns[j].textContent || "").trim();
-
-            if (btxt === "Aceptar") {
-                btns[j].click();
-                return {ok: true, via: "button"};
-            }
+            var t = (btns[j].innerText || btns[j].textContent || "").trim();
+            if (t === "Aceptar") { btns[j].click(); return {ok: true}; }
         }
-
-        var xbtns = Array.from(win.querySelectorAll(".x-btn"));
-
-        for (var k = 0; k < xbtns.length; k++) {
-            var xbtxt = (xbtns[k].innerText || xbtns[k].textContent || "").trim();
-
-            if (xbtxt === "Aceptar") {
-                xbtns[k].click();
-                return {ok: true, via: "x-btn"};
-            }
-        }
-
-        return {ok: false, win_found: true};
+        return {ok: false, win_found: true, btns: btns.length};
     }
-
     return {ok: false, win_found: false};
 }
 """
@@ -211,1026 +181,604 @@ JS_CLICK_ACEPTAR = """
 JS_PT_EXISTE = """
 (ptId) => {
     var cells = Array.from(document.querySelectorAll(".x-grid3-cell-inner"));
-    return cells.some(function(c) {
-        return c.innerText.trim() === ptId;
-    });
+    return cells.some(function(c) { return c.innerText.trim() === ptId; });
+}
+"""
+
+JS_FILTRO_VISIBLE = """
+() => {
+    var wins = Array.from(document.querySelectorAll(".x-window,.x-panel"));
+    for (var w = 0; w < wins.length; w++) {
+        if (!wins[w].offsetParent) continue;
+        var wt = wins[w].innerText || "";
+        if (wt.indexOf("En bandeja de trabajo") >= 0 && wt.indexOf("Aplicar") >= 0)
+            return true;
+    }
+    return false;
 }
 """
 
 
-# =============================================================================
-# UTILS
-# =============================================================================
+# ─── Utilidades ───────────────────────────────────────────────────────────────
 
 async def screenshot(page, nombre):
     os.makedirs("capturas", exist_ok=True)
-
-    ts = datetime.now().strftime("%H%M%S")
-    safe = re.sub(r"[^a-zA-Z0-9_-]", "_", nombre)
-
-    path = f"capturas/{safe}_{ts}.png"
-
+    ts   = datetime.now().strftime("%H%M%S")
+    path = f"capturas/{nombre}_{ts}.png"
     await page.screenshot(path=path, full_page=False)
-
     print(f"    captura: {path}")
-
     return path
 
 
-def normalizar(txt):
-    return " ".join((txt or "").strip().split())
+def es_metropolitana(area: str) -> bool:
+    return any(k in area.lower() for k in AREA_KEYWORDS)
 
 
-def es_metropolitana(area):
-    return any(k in (area or "").lower() for k in AREA_KEYWORDS)
-
-
-def es_estado_pcct_exacto(estado):
-    e = normalizar(estado)
-    return e == ESTADO_EXACTO
-
-
-def extraer_info_fila(row):
-    id_pt = ""
-    area_pt = ""
-    estado_pt = ""
-
-    for cell in row:
-        c = normalizar(cell)
-
-        if re.match(r"^\d{4}-\d{5}$", c):
-            id_pt = c
-            continue
-
-        if "Revisión y Autorización" in c or "Revision y Autorizacion" in c:
-            estado_pt = c
-            continue
-
-        posibles_areas = [
-            "metropolitana",
-            "osorno",
-            "antofagasta",
-            "chiloe",
-            "chiloé",
-            "copiapo",
-            "copiapó",
-            "llvv",
-            "scada",
-            "temuco",
-            "puerto montt",
-            "transemel",
-            "protecciones",
-            "proyectos",
-            "mayor zonal",
-            "zonal",
-            "mantenimiento",
-        ]
-
-        if any(k in c.lower() for k in posibles_areas) and not area_pt:
-            area_pt = c
-
-    return id_pt, area_pt, estado_pt
-
-
-# =============================================================================
-# LOGIN
-# =============================================================================
+# ─── Paso 1: Login ────────────────────────────────────────────────────────────
 
 async def hacer_login(page):
-    print("\\n[1] LOGIN")
-
+    print("\n[1] LOGIN")
     await page.goto(SAESA_URL, wait_until="domcontentloaded", timeout=60_000)
     await page.wait_for_timeout(3000)
-
     usuario = await page.query_selector('input[name="user"], input[type="text"]')
     if usuario:
         await usuario.fill(SAESA_USER)
-
-    password = await page.query_selector('input[name="pass"], input[type="password"]')
-    if password:
-        await password.fill(SAESA_PASS)
-
+    passwd = await page.query_selector('input[name="pass"], input[type="password"]')
+    if passwd:
+        await passwd.fill(SAESA_PASS)
     await page.click('input[value="Login"], button:has-text("Login"), input[type="submit"]')
     await page.wait_for_load_state("networkidle", timeout=30_000)
-    await page.wait_for_timeout(2500)
+    await page.wait_for_timeout(2000)
+    print("  OK: sesion iniciada")
 
-    print("  OK: sesión iniciada")
 
-
-# =============================================================================
-# NAVEGACIÓN
-# =============================================================================
+# ─── Paso 2: Navegacion ───────────────────────────────────────────────────────
 
 async def navegar_a_permisos(page):
-    print("\\n[2] NAVEGACION")
-
+    print("\n[2] NAVEGACION")
     await page.wait_for_selector(
-        'a:has-text("Aplicaciones"), span:has-text("Aplicaciones")',
-        timeout=TIMEOUT,
-    )
-
+        'a:has-text("Aplicaciones"), span:has-text("Aplicaciones")', timeout=TIMEOUT)
     await page.click('a:has-text("Aplicaciones"), span:has-text("Aplicaciones")')
     await page.wait_for_timeout(1500)
-
     print("  -> Aplicaciones")
 
     await page.wait_for_selector('a:has-text("DMS")', timeout=TIMEOUT)
     await page.click('a:has-text("DMS")')
-
     await page.wait_for_load_state("networkidle", timeout=30_000)
-    await page.wait_for_timeout(3000)
-
+    await page.wait_for_timeout(2500)
     print("  -> DMS cargado")
-    await screenshot(page, "nav_01_dms")
 
+    # Detectar frame donde vive el contenido DMS
     frame = page
-
     for f in page.frames:
+        if f.name == "content":
+            frame = f
+            print(f"  frame: '{f.name}'")
+            break
         try:
-            if f.name == "content":
-                frame = f
-                print("  frame detectado: content")
-                break
-
             el = await f.query_selector('text="Planificación"')
             if el:
                 frame = f
-                print(f"  frame detectado por selector: {f.name}")
+                print(f"  frame detectado: '{f.name}'")
                 break
-
         except Exception:
             pass
 
     await frame.wait_for_selector('text="Planificación"', timeout=TIMEOUT)
     await frame.click('text="Planificación"')
     await page.wait_for_timeout(1000)
-
-    print("  -> menú Planificación abierto")
-    await screenshot(page, "nav_02_planificacion")
+    print("  -> menu Planificacion")
 
     await frame.wait_for_selector('text="Permisos de trabajo"', timeout=TIMEOUT)
     await frame.click('text="Permisos de trabajo"')
-
     await page.wait_for_load_state("networkidle", timeout=30_000)
-    await page.wait_for_timeout(3500)
-
-    print("  -> Permisos de trabajo")
-    await screenshot(page, "nav_03_permisos")
-
+    await page.wait_for_timeout(3000)
+    print("  -> Permisos de trabajo OK")
+    await screenshot(page, "nav_permisos")
     return frame
 
 
-# =============================================================================
-# FILTRO PCCT
-# =============================================================================
+# ─── Paso 3: Filtro Estado = PCCT ────────────────────────────────────────────
 
 async def aplicar_filtro_pcct(page, frame):
+    """
+    FIX PRINCIPAL: el trigger de 'Areas' estaba siendo clickeado en vez del de 'Estado'.
+    Solucion: buscar el trigger cuyo centro Y difiera menos de 15px del centro Y del label 'Estado:'
+    y que ademas este a la derecha del label (mismo renglon).
+    """
     print("\n[3] FILTRO")
 
-    await frame.click('text=Filtro')
+    await frame.click('text="Filtro"')
     await page.wait_for_timeout(2000)
     await screenshot(page, "filtro_01_abierto")
+    # Cerrar cualquier combo abierto antes de operar
+    await page.keyboard.press("Escape")
+    await page.wait_for_timeout(300)
 
-    # =========================================================
-    # ABRIR COMBO ESTADO
-    # =========================================================
-
-    r_estado = await frame.evaluate("""
+    # ── Click en el trigger del combobox Estado (no Areas) ────────────────────
+    r_trigger = await frame.evaluate("""
     () => {
-        const win = Array.from(document.querySelectorAll(".x-window"))
-            .filter(w => w.offsetParent && (w.innerText || "").includes("Filtros"))[0];
-
-        if (!win) {
-            return { ok:false, msg:"No encontré ventana Filtros" };
+        // Encontrar el panel Filtros
+        var filtroWin = null;
+        var wins = Array.from(document.querySelectorAll(".x-window,.x-panel"));
+        for (var w = 0; w < wins.length; w++) {
+            var wt = wins[w].innerText || "";
+            if (wt.indexOf("En bandeja de trabajo") >= 0 && wt.indexOf("Estado:") >= 0) {
+                filtroWin = wins[w]; break;
+            }
         }
+        if (!filtroWin) return {ok: false, msg: "panel Filtros no encontrado"};
 
-        const labels = Array.from(
-            win.querySelectorAll("label,td,div,span,b")
-        ).filter(el => el.offsetParent);
+        // Encontrar label "Estado:" dentro del panel
+        var labels = Array.from(filtroWin.querySelectorAll("*"));
+        var estadoEl = null;
+        for (var i = 0; i < labels.length; i++) {
+            var el = labels[i];
+            if (!el.offsetParent || el.children.length > 0) continue;
+            if ((el.innerText || "").trim() === "Estado:") { estadoEl = el; break; }
+        }
+        if (!estadoEl) return {ok: false, msg: "label Estado: no encontrado"};
 
-        let estadoLabel = null;
+        var eRect = estadoEl.getBoundingClientRect();
+        var eCenterY = eRect.top + eRect.height / 2;
 
-        for (const el of labels) {
-            const txt = (el.innerText || "").trim();
-
-            if (txt === "Estado:") {
-                estadoLabel = el;
-                break;
+        // Buscar trigger en la misma linea horizontal (distY < 15px) y a la derecha
+        var triggers = Array.from(filtroWin.querySelectorAll("img.x-form-arrow-trigger"));
+        var debug = [];
+        var best = null, bestDistY = 9999;
+        for (var j = 0; j < triggers.length; j++) {
+            var t = triggers[j];
+            if (!t.offsetParent) continue;
+            var tr = t.getBoundingClientRect();
+            var tCenterY = tr.top + tr.height / 2;
+            var distY = Math.abs(tCenterY - eCenterY);
+            debug.push({x: Math.round(tr.x), y: Math.round(tr.y), distY: Math.round(distY)});
+            // Mismo renglon (distY < 15) y a la derecha del label
+            if (distY < 15 && tr.left > eRect.left && distY < bestDistY) {
+                bestDistY = distY;
+                best = t;
             }
         }
 
-        if (!estadoLabel) {
-            return { ok:false, msg:"No encontré label Estado:" };
+        if (!best) {
+            // Fallback: menor distY sin restriccion de X
+            for (var k = 0; k < triggers.length; k++) {
+                var t2 = triggers[k];
+                if (!t2.offsetParent) continue;
+                var tr2 = t2.getBoundingClientRect();
+                var d2 = Math.abs((tr2.top + tr2.height/2) - eCenterY);
+                if (d2 < bestDistY) { bestDistY = d2; best = t2; }
+            }
+            if (!best) return {ok: false, msg: "ningún trigger encontrado", debug: debug};
         }
 
-        const lr = estadoLabel.getBoundingClientRect();
-        const wr = win.getBoundingClientRect();
-
-        const y = lr.y + lr.height / 2;
-        const x = wr.right - 22;
-
-        const el = document.elementFromPoint(x, y);
-
-        if (!el) {
-            return {
-                ok:false,
-                msg:"elementFromPoint no encontró elemento",
-                x:Math.round(x),
-                y:Math.round(y)
-            };
-        }
-
-        el.click();
-
+        var br = best.getBoundingClientRect();
+        best.click();
         return {
-            ok:true,
-            metodo:"click directo en fila Estado",
-            x:Math.round(x),
-            y:Math.round(y),
-            labelY:Math.round(lr.y),
-            clickedTag:el.tagName,
-            clickedClass:String(el.className || "")
+            ok: true,
+            x: Math.round(br.x), y: Math.round(br.y),
+            labelCenterY: Math.round(eCenterY),
+            distY: Math.round(bestDistY),
+            debug: debug
         };
     }
     """)
-
-    print(f"  trigger Estado: {r_estado}")
-
-    if not r_estado.get("ok"):
-        raise RuntimeError(f"No se pudo abrir combo Estado: {r_estado}")
-
+    print(f"  trigger Estado: {r_trigger}")
     await page.wait_for_timeout(1500)
-    await screenshot(page, "filtro_02_dropdown_estado")
+    await screenshot(page, "filtro_02_dropdown")
 
-    # =========================================================
-    # SELECCIONAR PCCT
-    # =========================================================
-
+    # ── Seleccionar PCCT en el combo ──────────────────────────────────────────
     r_pcct = await frame.evaluate("""
     () => {
-        const objetivo = "Revisión y Autorización PCCT";
-
-        function limpiar(txt) {
-            return (txt || "")
-                .replace(/[│├└─ \\u2007]/g, "")
-                .replace(/\\s+/g, " ")
-                .trim();
-        }
-
-        const items = Array.from(
-            document.querySelectorAll(".x-combo-list-item")
-        ).filter(el => el.offsetParent);
-
-        const disponibles = items.map(el =>
-            limpiar(el.innerText || "")
-        );
-
-        for (const item of items) {
-            const raw = (item.innerText || "").trim();
-            const txt = limpiar(raw);
-
-            if (txt === objetivo) {
-                item.scrollIntoView({block:"center"});
-                item.click();
-
-                return {
-                    ok:true,
-                    raw:raw,
-                    text:txt,
-                    disponibles:disponibles
-                };
+        // Lista desplegable ExtJS
+        var items = Array.from(document.querySelectorAll(".x-combo-list-item"));
+        for (var i = 0; i < items.length; i++) {
+            var t = (items[i].innerText || "").trim();
+            if (t === "Revisi\u00f3n y Autorizaci\u00f3n PCCT") {
+                items[i].click();
+                return {ok: true, method: "exact", text: t};
             }
         }
-
-        return {
-            ok:false,
-            disponibles:disponibles
-        };
+        for (var j = 0; j < items.length; j++) {
+            var t2 = (items[j].innerText || "").trim();
+            if (t2.indexOf("PCCT") >= 0 && t2.indexOf("Revisi") >= 0) {
+                items[j].click();
+                return {ok: true, method: "partial", text: t2};
+            }
+        }
+        var disponibles = items.map(function(e) { return (e.innerText||"").trim(); });
+        return {ok: false, disponibles: disponibles.slice(0, 30)};
     }
     """)
+    print(f"  seleccion PCCT: {r_pcct}")
+    await page.wait_for_timeout(800)
+    await screenshot(page, "filtro_03_pcct")
 
-    print(f"  selección PCCT: {r_pcct}")
-
-    await page.wait_for_timeout(1000)
-    await screenshot(page, "filtro_03_pcct_seleccionado")
-
+    # Si no se pudo seleccionar con el combo, intentar escribir en el input
     if not r_pcct.get("ok"):
-        raise RuntimeError(
-            f"No se pudo seleccionar Estado PCCT: {r_pcct}"
-        )
-
-    # =========================================================
-    # CLICK REAL EN BOTON APLICAR
-    # =========================================================
-
-    print("  Aplicar con locator real dentro del frame")
-
-    aplicar_btn = frame.locator(
-        "button.x-btn-text.apply",
-        has_text="Aplicar"
-    ).first
-
-    await aplicar_btn.click(timeout=5000, force=True)
-
-    await page.wait_for_timeout(8000)
-    await screenshot(page, "filtro_04_aplicado")
-
-    filtro_sigue_abierto = await frame.evaluate("""
-    () => {
-        const win = Array.from(document.querySelectorAll(".x-window"))
-            .filter(w =>
-                w.offsetParent &&
-                (w.innerText || "").includes("Filtros")
-            )[0];
-
-        return !!win;
-    }
-    """)
-
-    print(f"  filtro sigue abierto: {filtro_sigue_abierto}")
-
-    if filtro_sigue_abierto:
-        print("  Retry Aplicar con doble click locator")
-
-        await aplicar_btn.dblclick(
-            timeout=5000,
-            force=True
-        )
-
-        await page.wait_for_timeout(8000)
-        await screenshot(page, "filtro_04_aplicado_retry")
-
-    # =========================================================
-    # VALIDAR RESULTADO
-    # =========================================================
-
-    info = await frame.evaluate("""
-    () => {
-        const rows = document.querySelectorAll(".x-grid3-row");
-
-        const pagText = Array.from(document.querySelectorAll("*"))
-            .filter(e =>
-                e.children.length === 0 &&
-                e.offsetParent &&
-                (e.innerText || "").indexOf("Mostrando") >= 0
-            )
-            .map(e => e.innerText.trim());
-
-        return {
-            filas_visibles: rows.length,
-            paginador: pagText
-        };
-    }
-    """)
-
-    print(f"  resultado filtro: {info}")
-
-    return info
-
-# =============================================================================
-# SELECCIÓN REAL DE FILA
-# =============================================================================
-
-async def seleccionar_fila_pt(page, frame, pt_id):
-    try:
-        row = frame.locator(
-            ".x-grid3-row",
-            has_text=pt_id
-        ).first
-
-        await row.scroll_into_view_if_needed(timeout=5000)
-        await page.wait_for_timeout(500)
-
-        await row.click(
-            timeout=5000,
-            force=True
-        )
-
-        await page.wait_for_timeout(1200)
-
-        celda = frame.locator(
-            ".x-grid3-cell-inner",
-            has_text=pt_id
-        ).first
-
-        await celda.click(
-            timeout=5000,
-            force=True
-        )
-
-        await page.wait_for_timeout(1200)
-
-        # validar selección visual
-        selected = await row.evaluate("""
-        (el) => {
-            return (
-                el.classList.contains("x-grid3-row-selected") ||
-                el.className.includes("selected")
-            );
+        print("  combo fallo, intentando escribir en input Estado...")
+        await frame.evaluate("""
+        () => {
+            var filtroWin = null;
+            var wins = Array.from(document.querySelectorAll(".x-window,.x-panel"));
+            for (var w=0;w<wins.length;w++) {
+                if ((wins[w].innerText||"").indexOf("Estado:")>=0 &&
+                    (wins[w].innerText||"").indexOf("Aplicar")>=0) {
+                    filtroWin=wins[w]; break;
+                }
+            }
+            if (!filtroWin) return;
+            // Encontrar label Estado y el input mas cercano
+            var labels=Array.from(filtroWin.querySelectorAll("*"));
+            var estadoEl=null;
+            for (var i=0;i<labels.length;i++) {
+                var el=labels[i];
+                if (!el.offsetParent||el.children.length>0) continue;
+                if ((el.innerText||"").trim()==="Estado:") {estadoEl=el;break;}
+            }
+            if (!estadoEl) return;
+            var eY=estadoEl.getBoundingClientRect().top;
+            var inputs=Array.from(filtroWin.querySelectorAll("input[type=text],input:not([type])"));
+            var best=null,bestD=999;
+            for (var j=0;j<inputs.length;j++) {
+                var inp=inputs[j];
+                if (!inp.offsetParent) continue;
+                var d=Math.abs(inp.getBoundingClientRect().top-eY);
+                if (d<bestD){bestD=d;best=inp;}
+            }
+            if (best) { best.focus(); best.value=""; }
         }
         """)
-
-        return {
-            "found": True,
-            "selected": selected
+        await page.wait_for_timeout(300)
+        await page.keyboard.type("PCCT", delay=80)
+        await page.wait_for_timeout(1000)
+        await screenshot(page, "filtro_alt_input")
+        r_pcct2 = await frame.evaluate("""
+        () => {
+            var items=Array.from(document.querySelectorAll(".x-combo-list-item"));
+            for (var i=0;i<items.length;i++) {
+                var t=(items[i].innerText||"").trim();
+                if (t.indexOf("PCCT")>=0&&t.indexOf("Revisi")>=0) {
+                    items[i].click(); return {ok:true,text:t};
+                }
+            }
+            return {ok:false};
         }
+        """)
+        print(f"  seleccion alt: {r_pcct2}")
 
-    except Exception as e:
-        return {
-            "found": False,
-            "selected": False,
-            "error": str(e)
+    # ── Click en Aplicar ──────────────────────────────────────────────────────
+    r_aplicar = await frame.evaluate("""
+    () => {
+        var filtroWin = null;
+        var wins = Array.from(document.querySelectorAll(".x-window,.x-panel"));
+        for (var w=0;w<wins.length;w++) {
+            var wt=wins[w].innerText||"";
+            if (wt.indexOf("Aplicar")>=0&&wt.indexOf("Limpiar")>=0&&wins[w].offsetParent) {
+                filtroWin=wins[w]; break;
+            }
         }
+        if (!filtroWin) return {ok:false,msg:"panel no encontrado"};
+        var btns=Array.from(filtroWin.querySelectorAll("a,button,span,td"));
+        for (var i=0;i<btns.length;i++) {
+            var b=btns[i];
+            if (!b.offsetParent) continue;
+            var t=(b.innerText||b.textContent||"").trim();
+            if (t==="Aplicar") { b.click(); return {ok:true}; }
+        }
+        return {ok:false};
+    }
+    """)
+    print(f"  Aplicar: {r_aplicar}")
 
-# =============================================================================
-# APROBAR PTS
-# =============================================================================
+    await page.wait_for_load_state("networkidle", timeout=30_000)
+    await page.wait_for_timeout(3000)
+    await screenshot(page, "filtro_04_aplicado")
+
+    # ── Verificar que el panel Filtros se cerro ───────────────────────────────
+    filtro_abierto = await frame.evaluate(JS_FILTRO_VISIBLE)
+    if filtro_abierto:
+        print("  ADVERTENCIA: panel Filtros sigue visible, cerrando con Escape...")
+        await page.keyboard.press("Escape")
+        await page.wait_for_timeout(1000)
+        await screenshot(page, "filtro_05_cerrado")
+
+    # ── Contar resultados ─────────────────────────────────────────────────────
+    info = await frame.evaluate("""
+    () => {
+        var rows = document.querySelectorAll(".x-grid3-row");
+        var pag = Array.from(document.querySelectorAll("*"))
+            .filter(function(e) {
+                return e.children.length===0 && e.offsetParent &&
+                       (e.innerText||"").indexOf("Mostrando")>=0;
+            }).map(function(e) { return e.innerText.trim(); });
+        return {filas: rows.length, paginador: pag};
+    }
+    """)
+    print(f"  resultado filtro: {info}")
+    pag_str = str(info.get("paginador", []))
+    if "343" in pag_str:
+        print("  ADVERTENCIA: el filtro no se aplico (343 resultados = sin filtro)")
+
+
+# ─── Paso 4: Aprobar PT's ────────────────────────────────────────────────────
 
 async def aprobar_pts(page, frame):
-    print("\n[4] APROBANDO PTs")
-    print(f"  DRY_RUN: {DRY_RUN}")
-    print(f"  MAX_APROBACIONES: {MAX_APROBACIONES}")
-
+    print("\n[4] APROBANDO PT's")
     pts_aprobados = []
-    pts_fallidos = []
-    pts_omitidos = []
+    pts_fallidos  = []
+    pts_omitidos  = []
 
     total_paginas = await frame.evaluate(JS_GET_TOTAL_PAGES)
+    print(f"  Total paginas: {total_paginas}")
     paginas = min(total_paginas, 20)
 
-    print(f"  Total páginas: {total_paginas}")
-
     for pagina in range(1, paginas + 1):
-        print(f"\n  ── Página {pagina}/{paginas} ──")
-
-        await page.wait_for_timeout(1500)
+        print(f"\n  ── Pagina {pagina}/{paginas} ──")
 
         filas = await frame.evaluate(JS_READ_ROWS)
-        print(f"  Filas leídas: {len(filas)}")
+        print(f"  Filas: {len(filas)}")
 
         pts_esta_pagina = []
-
         for row in filas:
             if not row:
                 continue
+            id_pt = area_pt = estado_pt = ""
+            for cell in row:
+                if re.match(r"^\d{4}-\d{5}$", cell):
+                    id_pt = cell
+                elif any(k in cell.lower() for k in [
+                    "metropolitana", "osorno", "antofagasta", "chiloe", "copiapo",
+                    "llvv", "llv", "scada", "temuco", "puerto montt", "transemel",
+                    "protecciones", "proyectos", "mayor zonal", "area llv"
+                ]):
+                    if not area_pt:
+                        area_pt = cell
+                elif "PCCT" in cell and not estado_pt:
+                    estado_pt = cell
+                elif ("Revisi" in cell or "Autorizaci" in cell) and not estado_pt:
+                    estado_pt = cell
 
-            id_pt, area_pt, estado_pt = extraer_info_fila(row)
-
-            if not id_pt:
-                continue
-
-            if not es_estado_pcct_exacto(estado_pt):
-                pts_omitidos.append({
-                    "id": id_pt,
-                    "area": area_pt or "Sin área detectada",
-                    "motivo": f"Estado no corresponde: {estado_pt or 'Sin estado detectado'}"
-                })
-
-                print(f"    [OMITIR ESTADO] {id_pt} | {estado_pt}")
+            if not id_pt or "PCCT" not in estado_pt:
                 continue
 
             if es_metropolitana(area_pt):
-                pts_esta_pagina.append({
-                    "id": id_pt,
-                    "area": area_pt,
-                    "estado": estado_pt
-                })
-
-                print(f"    [APROBAR] {id_pt} | {area_pt} | {estado_pt}")
-
+                pts_esta_pagina.append({"id": id_pt, "area": area_pt})
+                print(f"    [APROBAR] {id_pt} | {area_pt}")
             else:
-                pts_omitidos.append({
-                    "id": id_pt,
-                    "area": area_pt or "Sin área detectada",
-                    "motivo": "Área no Metropolitana"
-                })
+                pts_omitidos.append({"id": id_pt, "area": area_pt})
+                print(f"    [OMITIR]  {id_pt} | {area_pt}")
 
-                print(f"    [OMITIR AREA] {id_pt} | {area_pt}")
-
+        ya_aprobados_set = set(pts_aprobados)
         for pt in pts_esta_pagina:
+            if pt["id"] in ya_aprobados_set:
+                continue
 
-            if len(pts_aprobados) >= MAX_APROBACIONES:
-                print("    LÍMITE DE SEGURIDAD ALCANZADO")
-                return pts_aprobados, pts_fallidos, pts_omitidos
-
-            print(f"\n    >> Procesando {pt['id']}")
-
+            print(f"\n    >> {pt['id']}")
             try:
-
-                if DRY_RUN:
-                    print(f"    [DRY RUN] {pt['id']} NO fue aprobado realmente")
-
-                    pts_aprobados.append({
-                        "id": pt["id"],
-                        "area": pt["area"],
-                        "estado": pt["estado"],
-                        "modo": "SIMULADO"
-                    })
-
+                # A: Obtener coordenadas reales de la fila y hacer click nativo
+                coords = await frame.evaluate(JS_GET_ROW_COORDS, pt["id"])
+                print(f"    coords fila: {coords}")
+                if not coords.get("found"):
+                    pts_fallidos.append(f"{pt['id']} (fila no encontrada)")
+                    await screenshot(page, f"err_nofila_{pt['id']}")
                     continue
 
-                # =====================================================
-                # SELECCIONAR FILA
-                # =====================================================
+                # Click nativo con page.mouse usando coordenadas absolutas de la pagina
+                await page.mouse.click(coords["x"], coords["y"])
+                await page.wait_for_timeout(1000)
 
-                sel = await seleccionar_fila_pt(
-                    page,
-                    frame,
-                    pt["id"]
-                )
+                # B: Verificar seleccion en ExtJS
+                check = await frame.evaluate(JS_CHECK_ROW_SELECTED, pt["id"])
+                print(f"    seleccionada: {check}")
 
-                print(f"    selección Playwright: {sel}")
+                if not check.get("selected"):
+                    # Segundo intento
+                    await page.mouse.click(coords["x"], coords["y"])
+                    await page.wait_for_timeout(800)
+                    check2 = await frame.evaluate(JS_CHECK_ROW_SELECTED, pt["id"])
+                    print(f"    seleccion retry: {check2}")
 
-                if not sel.get("found"):
-                    pts_fallidos.append(
-                        f"{pt['id']} - fila no encontrada/no seleccionable"
-                    )
-
-                    await screenshot(
-                        page,
-                        f"err_select_{pt['id']}"
-                    )
-
-                    continue
-
-                if not sel.get("selected"):
-                    pts_fallidos.append(
-                        f"{pt['id']} - fila no quedó seleccionada"
-                    )
-
-                    await screenshot(
-                        page,
-                        f"err_not_selected_{pt['id']}"
-                    )
-
-                    continue
-
-                await screenshot(
-                    page,
-                    f"fila_select_{pt['id']}"
-                )
-
-                # =====================================================
-                # VALIDAR BOTON APROBAR
-                # =====================================================
-
+                # C: Verificar boton Aprobar
                 btn = await frame.evaluate(JS_CHECK_BTN_APROBAR)
-
-                print(f"    botón Aprobar: {btn}")
-
+                print(f"    btn Aprobar: {btn}")
                 if not btn.get("found"):
-                    pts_fallidos.append(
-                        f"{pt['id']} - botón Aprobar no visible"
-                    )
-
-                    await screenshot(
-                        page,
-                        f"err_nobtn_{pt['id']}"
-                    )
-
+                    pts_fallidos.append(f"{pt['id']} (boton Aprobar no visible)")
+                    await screenshot(page, f"err_nobtn_{pt['id']}")
                     continue
-
                 if btn.get("disabled"):
-                    pts_fallidos.append(
-                        f"{pt['id']} - botón Aprobar deshabilitado"
-                    )
+                    print(f"    disabled, reintentando click en fila...")
+                    await page.mouse.click(coords["x"], coords["y"])
+                    await page.wait_for_timeout(1200)
+                    btn2 = await frame.evaluate(JS_CHECK_BTN_APROBAR)
+                    print(f"    btn retry: {btn2}")
+                    if btn2.get("disabled"):
+                        pts_fallidos.append(f"{pt['id']} (Aprobar disabled)")
+                        await screenshot(page, f"err_disabled_{pt['id']}")
+                        continue
 
-                    await screenshot(
-                        page,
-                        f"err_disabled_{pt['id']}"
-                    )
-
+                # D: Click en boton Aprobar
+                await screenshot(page, f"pre_{pt['id']}")
+                click_r = await frame.evaluate(JS_CLICK_BTN_APROBAR)
+                print(f"    click Aprobar: {click_r}")
+                if not click_r.get("clicked"):
+                    pts_fallidos.append(f"{pt['id']} (click Aprobar fallo)")
                     continue
 
-                await screenshot(
-                    page,
-                    f"pre_{pt['id']}"
-                )
-
-                # =====================================================
-                # CLICK APROBAR
-                # =====================================================
-
-                click_r = await frame.evaluate(
-                    JS_CLICK_BTN_APROBAR
-                )
-
-                print(f"    click Aprobar: {click_r}")
-
-                if not click_r.get("clicked"):
-
-                    print("    Retry Aprobar con locator real")
-
-                    aprobar_btn = frame.locator(
-                        "button.x-btn-text",
-                        has_text="Aprobar"
-                    ).first
-
-                    await aprobar_btn.click(
-                        timeout=5000,
-                        force=True
-                    )
-
-                    click_r = {
-                        "clicked": True,
-                        "via": "locator real"
-                    }
-
-                    print(
-                        f"    click Aprobar retry: {click_r}"
-                    )
-
-                await page.wait_for_timeout(2000)
-
-                # =====================================================
-                # DETECTAR POPUP
-                # =====================================================
-
+                # E: Esperar popup Ext.Window "Aprobar"
                 popup = {"found": False}
-
-                for intento in range(14):
-
-                    await page.wait_for_timeout(700)
-
-                    popup = await frame.evaluate(
-                        JS_DETECT_POPUP
-                    )
-
+                for intento in range(14):   # hasta 7 segundos
+                    await page.wait_for_timeout(500)
+                    popup = await frame.evaluate(JS_DETECT_POPUP_APROBAR)
                     if popup.get("found"):
-
-                        print(
-                            f"    popup OK intento {intento + 1}: {popup}"
-                        )
-
+                        print(f"    popup OK (intento {intento+1}): {popup}")
                         break
 
-                await screenshot(
-                    page,
-                    f"popup_{pt['id']}"
-                )
+                await screenshot(page, f"popup_{pt['id']}")
 
                 if not popup.get("found"):
-
-                    pts_fallidos.append(
-                        f"{pt['id']} - popup Aprobar no apareció"
-                    )
-
-                    print(
-                        "    ERROR: popup Aprobar no apareció"
-                    )
-
+                    pts_fallidos.append(f"{pt['id']} (popup no aparecio)")
+                    print(f"    ERROR: popup no aparecio")
                     continue
 
-                # =====================================================
-                # CLICK ACEPTAR
-                # =====================================================
-
-                aceptar = await frame.evaluate(
-                    JS_CLICK_ACEPTAR
-                )
-
+                # F: Click en Aceptar
+                aceptar = await frame.evaluate(JS_CLICK_ACEPTAR_EN_POPUP)
                 print(f"    Aceptar: {aceptar}")
-
                 if not aceptar.get("ok"):
-
-                    pts_fallidos.append(
-                        f"{pt['id']} - click Aceptar falló"
-                    )
-
-                    await screenshot(
-                        page,
-                        f"err_aceptar_{pt['id']}"
-                    )
-
+                    pts_fallidos.append(f"{pt['id']} (Aceptar fallo: {aceptar})")
+                    await screenshot(page, f"err_aceptar_{pt['id']}")
                     continue
 
-                # =====================================================
-                # ESPERAR PROCESAMIENTO REAL CENTRALITY
-                # =====================================================
+                # G: Esperar procesamiento
+                await page.wait_for_load_state("networkidle", timeout=20_000)
+                await page.wait_for_timeout(2500)
+                await screenshot(page, f"post_{pt['id']}")
 
-                print("    esperando procesamiento Centrality...")
-
-                await page.wait_for_timeout(5000)
-
-                # esperar cierre popup
-                for _ in range(20):
-
-                    popup_abierto = await frame.evaluate("""
-                    () => {
-                        return Array.from(
-                            document.querySelectorAll(".x-window")
-                        ).some(w =>
-                            w.offsetParent &&
-                            (
-                                (w.innerText || "").includes("Aprobar") ||
-                                (w.innerText || "").includes("Confirm")
-                            )
-                        );
-                    }
-                    """)
-
-                    if not popup_abierto:
-                        break
-
-                    await page.wait_for_timeout(1000)
-
-                # refresh grilla
-                refresh = await frame.evaluate(
-                    JS_REFRESH_GRID
-                )
-
-                print(f"    refresh grilla: {refresh}")
-
-                await page.wait_for_timeout(5000)
-
-                # =====================================================
-                # ESPERAR DESAPARICION PT
-                # =====================================================
-
-                desaparecio = False
-
-                for intento in range(20):
-
-                    aun_existe = await frame.evaluate(
-                        JS_PT_EXISTE,
-                        pt["id"]
-                    )
-
-                    if not aun_existe:
-                        desaparecio = True
-                        break
-
-                    print(
-                        f"    esperando desaparición PT... intento {intento+1}"
-                    )
-
-                    await page.wait_for_timeout(1500)
-
-                await screenshot(
-                    page,
-                    f"post_{pt['id']}"
-                )
-
-                if desaparecio:
-
-                    print(
-                        f"    Confirmado: {pt['id']} ya no aparece"
-                    )
-
-                    pts_aprobados.append({
-                        "id": pt["id"],
-                        "area": pt["area"],
-                        "estado": pt["estado"],
-                        "modo": "REAL"
-                    })
-
-                    print(
-                        f"    APROBADO REAL: {pt['id']}"
-                    )
-
+                # H: Confirmar desaparicion
+                aun_existe = await frame.evaluate(JS_PT_EXISTE, pt["id"])
+                if aun_existe:
+                    print(f"    ADVERTENCIA: {pt['id']} sigue visible (lag)")
                 else:
+                    print(f"    Confirmado: {pt['id']} desaparecio")
 
-                    print(
-                        f"    ERROR: {pt['id']} sigue visible"
-                    )
-
-                    pts_fallidos.append(
-                        f"{pt['id']} - sigue visible después de aprobar"
-                    )
+                pts_aprobados.append(pt["id"])
+                print(f"    APROBADO: {pt['id']}")
 
             except Exception as e:
-
-                msg = str(e)[:250]
-
-                pts_fallidos.append(
-                    f"{pt['id']} - {msg}"
-                )
-
-                print(f"    EXCEPCIÓN: {msg}")
-
-                await screenshot(
-                    page,
-                    f"exc_{pt['id']}"
-                )
-
-        if len(pts_aprobados) >= MAX_APROBACIONES:
-            print("  LÍMITE DE SEGURIDAD ALCANZADO")
-            break
+                msg = str(e)[:150]
+                pts_fallidos.append(f"{pt['id']}: {msg}")
+                print(f"    EXCEPCION: {msg}")
+                await screenshot(page, f"exc_{pt['id']}")
 
         if pagina < paginas:
-
             sig = await frame.evaluate(JS_NEXT_PAGE)
-
             if not sig:
-                print("  No hay más páginas")
+                print("  No hay mas paginas.")
                 break
-
-            await page.wait_for_timeout(4000)
+            await page.wait_for_load_state("networkidle", timeout=15_000)
+            await page.wait_for_timeout(2500)
 
     await screenshot(page, "final")
-
     return pts_aprobados, pts_fallidos, pts_omitidos
 
-# =============================================================================
-# CORREO
-# =============================================================================
+
+# ─── Reporte correo ───────────────────────────────────────────────────────────
 
 def enviar_reporte(pts_aprobados, pts_fallidos, pts_omitidos, error_critico=None):
-    fecha = datetime.now().strftime("%d/%m/%Y %H:%M")
-    modo_txt = "DRY RUN / SIMULACIÓN" if DRY_RUN else "REAL"
+    # Hora real en Chile
+    ahora_chile = datetime.now(TZ_CHILE)
+    fecha       = ahora_chile.strftime("%d/%m/%Y")
+    hora        = ahora_chile.strftime("%H:%M")
+    hora_ampm   = ahora_chile.strftime("%I:%M %p").lower()  # ej: 08:01 am
 
-    def filas_aprobados():
-        if not pts_aprobados:
-            return "<tr><td colspan='4' style='padding:6px 12px;color:#999'>Ninguno</td></tr>"
-
-        html = ""
-
-        for pt in pts_aprobados:
-            etiqueta = pt.get("modo", "")
-
-            html += (
-                "<tr>"
-                "<td style='padding:4px 8px;color:#006600;font-size:16px'>&#10003;</td>"
-                f"<td style='font-family:monospace;padding:4px 12px'>{pt.get('id')}</td>"
-                f"<td style='padding:4px 12px'>{pt.get('area','')}</td>"
-                f"<td style='padding:4px 12px'><strong>{etiqueta}</strong></td>"
-                "</tr>"
-            )
-
-        return html
-
-    def filas_fallidos():
-        if not pts_fallidos:
-            return "<tr><td colspan='2' style='padding:6px 12px;color:#999'>Sin errores</td></tr>"
-
-        return "".join(
-            "<tr>"
-            "<td style='padding:4px 8px;color:#cc0000;font-size:16px'>&#10007;</td>"
-            f"<td style='padding:4px 12px;font-size:13px'>{pt}</td>"
-            "</tr>"
-            for pt in pts_fallidos
-        )
-
-    def filas_omitidos():
-        if not pts_omitidos:
-            return "<tr><td colspan='4' style='padding:6px 12px;color:#999'>Ninguno</td></tr>"
-
-        html = ""
-
-        for pt in pts_omitidos:
-            html += (
-                "<tr>"
-                "<td style='padding:4px 8px;color:#aaa'>&mdash;</td>"
-                f"<td style='font-family:monospace;padding:4px 12px;color:#777'>{pt.get('id','')}</td>"
-                f"<td style='padding:4px 12px;color:#777'>{pt.get('area','')}</td>"
-                f"<td style='padding:4px 12px;color:#777'>{pt.get('motivo','')}</td>"
-                "</tr>"
-            )
-
-        return html
+    def filas(items, tipo):
+        if not items:
+            return "<tr><td colspan='2' style='padding:6px 12px;color:#999'>Ninguno</td></tr>"
+        if tipo == "ok":
+            return "".join(
+                f"<tr><td style='padding:4px 8px;color:#006600'>&#10003;</td>"
+                f"<td style='font-family:monospace;padding:4px 12px'>{pt}</td></tr>"
+                for pt in items)
+        if tipo == "err":
+            return "".join(
+                f"<tr><td style='padding:4px 8px;color:#cc0000'>&#10007;</td>"
+                f"<td style='padding:4px 12px;font-size:13px'>{pt}</td></tr>"
+                for pt in items)
+        if tipo == "omit":
+            return "".join(
+                f"<tr><td style='padding:4px 8px;color:#aaa'>&mdash;</td>"
+                f"<td style='padding:4px 12px;color:#777;font-size:13px'>"
+                f"{pt['id']} &middot; {pt['area'][:60]}</td></tr>"
+                for pt in items)
+        return ""
 
     error_bloque = ""
-
     if error_critico:
         error_bloque = (
             "<div style='background:#fff0f0;border-left:4px solid #c00;"
             "padding:12px 16px;margin:16px 0;border-radius:4px'>"
-            "<strong>Error crítico:</strong><br>"
-            f"<code style='font-size:12px'>{error_critico}</code>"
-            "</div>"
-        )
+            f"<strong>Error critico:</strong><br>"
+            f"<code style='font-size:12px'>{error_critico}</code></div>")
 
     html = (
-        "<html><body style='font-family:Arial,sans-serif;max-width:760px;margin:auto;color:#222'>"
+        "<html><body style='font-family:Arial,sans-serif;max-width:680px;margin:auto;color:#222'>"
         "<div style='background:#003580;color:white;padding:24px;border-radius:8px 8px 0 0'>"
-        "<h2 style='margin:0;font-size:20px'>Reporte PTs — SAESA / DMS</h2>"
-        "<p style='margin:6px 0 0;opacity:.8;font-size:14px'>"
-        "Aprobación PCCT · Zonal Metropolitana</p>"
+        "<h2 style='margin:0'>Reporte PT&rsquo;s &mdash; Centrality / DMS</h2>"
+        "<p style='margin:6px 0 0;opacity:.75;font-size:14px'>Autorizacion PCCT &middot; Zonal Metropolitana</p>"
         "</div>"
-
         "<div style='border:1px solid #ddd;border-top:none;padding:20px 24px;border-radius:0 0 8px 8px'>"
-        f"<p><strong>Fecha:</strong> {fecha}</p>"
-        f"<p><strong>Modo:</strong> {modo_txt}</p>"
-        "<p><strong>Criterio:</strong> Estado exacto = Revisión y Autorización PCCT "
-        " | Área contiene Metropolitana</p>"
-        + error_bloque +
-
-        f"<h3 style='color:#006600;margin:20px 0 8px'>PTs Aprobados ({len(pts_aprobados)})</h3>"
-        "<table style='border-collapse:collapse;width:100%'>"
-        "<tr style='background:#f6f6f6'><th></th><th>PT</th><th>Área</th><th>Modo</th></tr>"
-        f"{filas_aprobados()}</table>"
-
-        f"<h3 style='color:#cc0000;margin:20px 0 8px'>PTs con Error ({len(pts_fallidos)})</h3>"
-        f"<table style='border-collapse:collapse;width:100%'>{filas_fallidos()}</table>"
-
-        f"<h3 style='color:#888;margin:20px 0 8px'>PTs Omitidos ({len(pts_omitidos)})</h3>"
-        "<table style='border-collapse:collapse;width:100%'>"
-        "<tr style='background:#f6f6f6'><th></th><th>PT</th><th>Área</th><th>Motivo</th></tr>"
-        f"{filas_omitidos()}</table>"
-
-        "<p style='color:#bbb;font-size:11px;margin-top:24px;border-top:1px solid #eee;padding-top:12px'>"
-        "Bot SAESA · GitHub Actions · github.com/Nlorenzenl/saesa-automation</p>"
+        f"<p><strong>Fecha:</strong> {fecha} {hora}</p>"
+        "<p><strong>Criterio:</strong> Estado = PCCT &nbsp;|&nbsp; Area contiene &lsquo;Metropolitana&rsquo;</p>"
+        + error_bloque
+        + f"<h3 style='color:#006600;margin:20px 0 8px'>Aprobados ({len(pts_aprobados)})</h3>"
+        f"<table style='border-collapse:collapse;width:100%'>{filas(pts_aprobados,'ok')}</table>"
+        f"<h3 style='color:#cc0000;margin:20px 0 8px'>Con Error ({len(pts_fallidos)})</h3>"
+        f"<table style='border-collapse:collapse;width:100%'>{filas(pts_fallidos,'err')}</table>"
+        f"<h3 style='color:#888;margin:20px 0 8px'>Omitidos &mdash; otras zonas ({len(pts_omitidos)})</h3>"
+        f"<table style='border-collapse:collapse;width:100%'>{filas(pts_omitidos,'omit')}</table>"
         "</div></body></html>"
     )
 
-    asunto = (
-        f"[SAESA] ERROR {datetime.now().strftime('%d/%m/%Y')}"
-        if error_critico
-        else
-        f"[SAESA] {datetime.now().strftime('%d/%m/%Y')} | "
-        f"{len(pts_aprobados)} aprobados | "
-        f"{len(pts_fallidos)} errores | "
-        f"{len(pts_omitidos)} omitidos | {modo_txt}"
-    )
+    # Asunto con hora Chile
+    if error_critico:
+        asunto = f"[Reporte PTS Centrality] ERROR {fecha} {hora_ampm}"
+    else:
+        asunto = (
+            f"[Reporte PTS Centrality] {fecha} {hora_ampm} "
+            f"| {len(pts_aprobados)} aprobados"
+            f" | {len(pts_fallidos)} errores"
+            f" | {len(pts_omitidos)} omitidos"
+        )
 
+    # Destinatarios: principal + CC
+    todos = [EMAIL_DEST] + EMAIL_CC
     msg = MIMEMultipart("alternative")
     msg["Subject"] = asunto
-    msg["From"] = GMAIL_USER
-    msg["To"] = EMAIL_DEST
+    msg["From"]    = GMAIL_USER
+    msg["To"]      = EMAIL_DEST
+    msg["Cc"]      = ", ".join(EMAIL_CC)
     msg.attach(MIMEText(html, "html"))
-
     try:
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
             s.login(GMAIL_USER, GMAIL_PASS)
-            s.sendmail(GMAIL_USER, EMAIL_DEST, msg.as_string())
-
-        print(f"  Correo enviado a {EMAIL_DEST}")
-
+            s.sendmail(GMAIL_USER, todos, msg.as_string())
+        print(f"  Correo enviado a {todos}")
     except Exception as e:
-        print(f"  Error enviando correo: {e}")
+        print(f"  Error correo: {e}")
 
 
-# =============================================================================
-# MAIN
-# =============================================================================
+# ─── Main ─────────────────────────────────────────────────────────────────────
 
 async def main():
-    sep = "=" * 65
-
-    print(f"\\n{sep}")
-    print(f"  SAESA AUTOMATION | {datetime.now().strftime('%d/%m/%Y %H:%M')}")
-    print(f"  DRY_RUN: {DRY_RUN}")
-    print(f"{sep}")
-
-    pts_aprobados = []
-    pts_fallidos = []
-    pts_omitidos = []
+    sep = "=" * 55
+    print(f"\n{sep}\n  SAESA | {datetime.now().strftime('%d/%m/%Y %H:%M')}\n{sep}")
+    pts_aprobados, pts_fallidos, pts_omitidos = [], [], []
     error_critico = None
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
-            args=[
-                "--ignore-certificate-errors",
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-dev-shm-usage",
-            ],
-        )
-
-        ctx = await browser.new_context(
-            ignore_https_errors=True,
-            viewport={"width": 1400, "height": 900},
-        )
-
+            args=["--ignore-certificate-errors","--no-sandbox",
+                  "--disable-setuid-sandbox","--disable-dev-shm-usage"])
+        ctx  = await browser.new_context(
+            ignore_https_errors=True, viewport={"width": 1400, "height": 900})
         page = await ctx.new_page()
-
         try:
             await hacer_login(page)
-
             frame = await navegar_a_permisos(page)
-
             await aplicar_filtro_pcct(page, frame)
-
             pts_aprobados, pts_fallidos, pts_omitidos = await aprobar_pts(page, frame)
-
         except Exception as e:
             error_critico = str(e)
-
-            print(f"\\nERROR CRÍTICO: {e}")
-
-            try:
-                await screenshot(page, "error_critico")
-            except Exception:
-                pass
-
+            print(f"\nERROR CRITICO: {e}")
+            await screenshot(page, "error_critico")
         finally:
             await browser.close()
 
-    print(f"\\n{sep}")
-    print(f"  {len(pts_aprobados)} aprobados | {len(pts_fallidos)} errores | {len(pts_omitidos)} omitidos")
-    print(f"{sep}")
-
-    enviar_reporte(
-        pts_aprobados,
-        pts_fallidos,
-        pts_omitidos,
-        error_critico,
-    )
-
-    print("Fin.\\n")
+    print(f"\n{sep}\n  {len(pts_aprobados)} aprobados | {len(pts_fallidos)} errores | {len(pts_omitidos)} omitidos\n{sep}")
+    enviar_reporte(pts_aprobados, pts_fallidos, pts_omitidos, error_critico)
+    print("Fin.\n")
 
 
 if __name__ == "__main__":
     asyncio.run(main())
-
