@@ -24,7 +24,7 @@ GMAIL_PASS = os.environ["GMAIL_APP_PASS"]
 EMAIL_DEST = os.environ["EMAIL_DEST"]
 
 # Destinatarios adicionales CC
-EMAIL_CC = ["alexis.aedo@saesa.cl", "jorge.canete@saesa.cl"]
+EMAIL_CC = ["nicolas.lorenzen@saesa.cl"]
 
 DRY_RUN = os.environ.get("DRY_RUN", "true").lower() == "true"
 MAX_APROBACIONES = int(os.environ.get("MAX_APROBACIONES", "50"))
@@ -472,29 +472,31 @@ async def aplicar_filtro_pcct(page, frame):
 
     r_pcct = await frame.evaluate("""
     () => {
-        const objetivo = "Revisión y Autorización PCCT";
-
-        function limpiar(txt) {
-            return (txt || "")
-                .replace(/[│├└─ \u2007]/g, "")
-                .replace(/\s+/g, " ")
-                .trim();
-        }
-
+        // Buscar todos los items del combo abierto
         const items = Array.from(
             document.querySelectorAll(".x-combo-list-item")
         ).filter(el => el.offsetParent);
 
-        const disponibles = items.map(el => limpiar(el.innerText || ""));
+        const disponibles = items.map(el => (el.innerText || "").trim());
 
         for (const item of items) {
             const raw = (item.innerText || "").trim();
-            const txt = limpiar(raw);
 
-            if (txt === objetivo) {
-                item.scrollIntoView({block:"center"});
-                item.click();
-                return {ok:true, raw:raw, text:txt, disponibles:disponibles};
+            // Buscar el item que contenga PCCT pero NO contenga FP ni JACCT
+            if (
+                raw.indexOf("PCCT") >= 0 &&
+                raw.indexOf("FP") < 0 &&
+                raw.indexOf("JACCT") < 0
+            ) {
+                item.scrollIntoView({block: "center"});
+                // Disparar mousedown + mouseup + click para ExtJS
+                var evt1 = new MouseEvent("mousedown", {bubbles:true, cancelable:true});
+                var evt2 = new MouseEvent("mouseup",   {bubbles:true, cancelable:true});
+                var evt3 = new MouseEvent("click",     {bubbles:true, cancelable:true});
+                item.dispatchEvent(evt1);
+                item.dispatchEvent(evt2);
+                item.dispatchEvent(evt3);
+                return {ok:true, texto:raw, disponibles:disponibles};
             }
         }
 
