@@ -650,85 +650,325 @@ async def subir_pt_a_opat(opat_page, datos):
         print(f"  modal abierto: {modal_ok}")
         await screenshot(opat_page, f"opat_form_{pt_id}")
 
-        # Trabajar dentro del modal #modalEditarPT
-        modal = opat_page.locator('#modalEditarPT')
+        # Trabajar dentro del modal #modalEditarPT via JavaScript
+        # Usar JS evaluate para llenar campos directamente, evitando problemas de intercepción
+
+        async def fill_by_id(field_id, value):
+            """Llena un campo por su ID usando JS."""
+            result = await opat_page.evaluate(f"""
+            (val) => {{
+                var el = document.getElementById('{field_id}');
+                if (!el) return 'not_found';
+                el.focus();
+                el.value = val;
+                el.dispatchEvent(new Event('input', {{bubbles:true}}));
+                el.dispatchEvent(new Event('change', {{bubbles:true}}));
+                return 'ok';
+            }}
+            """, value)
+            return result
+
+        async def select_by_id(field_id, value):
+            """Selecciona una opción en un select por su ID usando JS."""
+            result = await opat_page.evaluate(f"""
+            (val) => {{
+                var el = document.getElementById('{field_id}');
+                if (!el) return 'not_found';
+                for (var i=0; i<el.options.length; i++) {{
+                    if (el.options[i].text.trim() === val ||
+                        el.options[i].value === val) {{
+                        el.selectedIndex = i;
+                        el.dispatchEvent(new Event('change', {{bubbles:true}}));
+                        return 'ok:' + el.options[i].text;
+                    }}
+                }}
+                // Fallback: buscar por texto parcial
+                for (var j=0; j<el.options.length; j++) {{
+                    if (el.options[j].text.includes(val)) {{
+                        el.selectedIndex = j;
+                        el.dispatchEvent(new Event('change', {{bubbles:true}}));
+                        return 'partial:' + el.options[j].text;
+                    }}
+                }}
+                return 'not_found_value';
+            }}
+            """, value)
+            return result
+
+        # Primero obtener los IDs reales de los campos del formulario
+        campos_info = await opat_page.evaluate("""
+        () => {
+            var modal = document.getElementById('modalEditarPT');
+            if (!modal) return {};
+            var inputs = Array.from(modal.querySelectorAll('input,select,textarea'));
+            var info = {};
+            inputs.forEach(function(el) {
+                var label = '';
+                if (el.id) {
+                    var labelEl = document.querySelector('label[for="' + el.id + '"]');
+                    if (labelEl) label = labelEl.innerText.trim();
+                }
+                info[el.id || el.name || 'no-id-' + el.type] = {
+                    type: el.type || el.tagName,
+                    placeholder: el.placeholder || '',
+                    label: label,
+                    value: el.value || ''
+                };
+            });
+            return info;
+        }
+        """)
+        print(f"  campos_info: {list(campos_info.keys())}")
 
         # ── N° PT ──────────────────────────────────────────────────────────────
-        campo_npt = modal.locator(
-            'input[placeholder*="Automático"], input[placeholder*="ingrese"], input[placeholder*="PT"]'
-        ).first
-        await campo_npt.fill("")
-        await campo_npt.fill(pt_id)
-        await opat_page.wait_for_timeout(500)
-        print(f"  N° PT: {pt_id}")
+        # Buscar input de N° PT (placeholder "Automático o ingrese")
+        r = await opat_page.evaluate(f"""
+        (ptId) => {{
+            var modal = document.getElementById('modalEditarPT');
+            if (!modal) return 'no modal';
+            var inputs = Array.from(modal.querySelectorAll('input[type="text"],input:not([type])'));
+            for (var i=0; i<inputs.length; i++) {{
+                var ph = (inputs[i].placeholder || '').toLowerCase();
+                if (ph.includes('autom') || ph.includes('ingrese') || ph.includes('n°') || ph.includes('npt')) {{
+                    inputs[i].value = ptId;
+                    inputs[i].dispatchEvent(new Event('input', {{bubbles:true}}));
+                    inputs[i].dispatchEvent(new Event('change', {{bubbles:true}}));
+                    return 'ok:' + inputs[i].id;
+                }}
+            }}
+            // Fallback: primer input de texto visible
+            for (var j=0; j<inputs.length; j++) {{
+                if (inputs[j].offsetParent) {{
+                    inputs[j].value = ptId;
+                    inputs[j].dispatchEvent(new Event('input', {{bubbles:true}}));
+                    inputs[j].dispatchEvent(new Event('change', {{bubbles:true}}));
+                    return 'fallback:' + inputs[j].id;
+                }}
+            }}
+            return 'not_found';
+        }}
+        """, pt_id)
+        print(f"  N° PT: {pt_id} → {r}")
+        await opat_page.wait_for_timeout(300)
 
         # ── ZONA → Metropolitana ───────────────────────────────────────────────
-        zona_select = modal.locator('select').filter(has_text="Seleccione Zona").first
-        await zona_select.select_option(label="Metropolitana")
-        await opat_page.wait_for_timeout(500)
-        print("  Zona: Metropolitana")
+        r = await opat_page.evaluate("""
+        () => {
+            var modal = document.getElementById('modalEditarPT');
+            var selects = Array.from(modal.querySelectorAll('select'));
+            for (var i=0; i<selects.length; i++) {
+                var opts = Array.from(selects[i].options).map(o => o.text.trim());
+                if (opts.some(o => o.includes('Zona') || o.includes('Metropolitana') || o.includes('Norte') || o.includes('Sur'))) {
+                    for (var j=0; j<selects[i].options.length; j++) {
+                        if (selects[i].options[j].text.trim() === 'Metropolitana') {
+                            selects[i].selectedIndex = j;
+                            selects[i].dispatchEvent(new Event('change', {bubbles:true}));
+                            return 'ok:' + selects[i].id;
+                        }
+                    }
+                }
+            }
+            return 'not_found';
+        }
+        """)
+        print(f"  Zona: Metropolitana → {r}")
+        await opat_page.wait_for_timeout(300)
 
         # ── FECHA INICIO ──────────────────────────────────────────────────────
         if datos.get("fecha_inicio"):
             fecha_str = datetime.strptime(datos["fecha_inicio"], "%m/%d/%Y").strftime("%Y-%m-%d")
-            await modal.locator('input[type="date"]').first.fill(fecha_str)
+            r = await opat_page.evaluate(f"""
+            (val) => {{
+                var modal = document.getElementById('modalEditarPT');
+                var dates = Array.from(modal.querySelectorAll('input[type="date"]'));
+                if (dates[0]) {{
+                    dates[0].value = val;
+                    dates[0].dispatchEvent(new Event('change', {{bubbles:true}}));
+                    return 'ok:' + dates[0].id;
+                }}
+                return 'not_found';
+            }}
+            """, fecha_str)
+            print(f"  Fecha inicio: {datos['fecha_inicio']} → {r}")
             await opat_page.wait_for_timeout(300)
-            print(f"  Fecha inicio: {datos['fecha_inicio']}")
 
         # ── HORA INICIO ───────────────────────────────────────────────────────
         if datos.get("hora_inicio"):
             dt_hora = datetime.strptime(datos["hora_inicio"], "%I:%M %p")
-            await modal.locator('input[type="time"]').first.fill(dt_hora.strftime("%H:%M"))
+            hora_str = dt_hora.strftime("%H:%M")
+            r = await opat_page.evaluate(f"""
+            (val) => {{
+                var modal = document.getElementById('modalEditarPT');
+                var times = Array.from(modal.querySelectorAll('input[type="time"]'));
+                if (times[0]) {{
+                    times[0].value = val;
+                    times[0].dispatchEvent(new Event('change', {{bubbles:true}}));
+                    return 'ok:' + times[0].id;
+                }}
+                return 'not_found';
+            }}
+            """, hora_str)
+            print(f"  Hora inicio: {datos['hora_inicio']} → {r}")
             await opat_page.wait_for_timeout(300)
-            print(f"  Hora inicio: {datos['hora_inicio']}")
 
         # ── FECHA FIN ─────────────────────────────────────────────────────────
         if datos.get("fecha_fin"):
             fecha_fin_str = datetime.strptime(datos["fecha_fin"], "%m/%d/%Y").strftime("%Y-%m-%d")
-            await modal.locator('input[type="date"]').nth(1).fill(fecha_fin_str)
+            r = await opat_page.evaluate(f"""
+            (val) => {{
+                var modal = document.getElementById('modalEditarPT');
+                var dates = Array.from(modal.querySelectorAll('input[type="date"]'));
+                if (dates[1]) {{
+                    dates[1].value = val;
+                    dates[1].dispatchEvent(new Event('change', {{bubbles:true}}));
+                    return 'ok:' + dates[1].id;
+                }}
+                return 'not_found';
+            }}
+            """, fecha_fin_str)
+            print(f"  Fecha fin: {datos['fecha_fin']} → {r}")
             await opat_page.wait_for_timeout(300)
-            print(f"  Fecha fin: {datos['fecha_fin']}")
 
         # ── HORA FIN ──────────────────────────────────────────────────────────
         if datos.get("hora_fin"):
             dt_hora_fin = datetime.strptime(datos["hora_fin"], "%I:%M %p")
-            await modal.locator('input[type="time"]').nth(1).fill(dt_hora_fin.strftime("%H:%M"))
+            hora_fin_str = dt_hora_fin.strftime("%H:%M")
+            r = await opat_page.evaluate(f"""
+            (val) => {{
+                var modal = document.getElementById('modalEditarPT');
+                var times = Array.from(modal.querySelectorAll('input[type="time"]'));
+                if (times[1]) {{
+                    times[1].value = val;
+                    times[1].dispatchEvent(new Event('change', {{bubbles:true}}));
+                    return 'ok:' + times[1].id;
+                }}
+                return 'not_found';
+            }}
+            """, hora_fin_str)
+            print(f"  Hora fin: {datos['hora_fin']} → {r}")
             await opat_page.wait_for_timeout(300)
-            print(f"  Hora fin: {datos['hora_fin']}")
 
         # ── TIPO TRABAJO ──────────────────────────────────────────────────────
         tipo_trabajo = datos.get("tipo_trabajo", "DESCONEXIÓN")
-        tipo_select  = modal.locator('select').filter(has_text="DESCONEXIÓN").first
-        await tipo_select.select_option(label=tipo_trabajo)
-        await opat_page.wait_for_timeout(500)
-        print(f"  Tipo trabajo: {tipo_trabajo}")
+        r = await opat_page.evaluate(f"""
+        (tipo) => {{
+            var modal = document.getElementById('modalEditarPT');
+            var selects = Array.from(modal.querySelectorAll('select'));
+            for (var i=0; i<selects.length; i++) {{
+                var opts = Array.from(selects[i].options).map(o => o.text.trim());
+                if (opts.includes('DESCONEXIÓN') || opts.includes('INTERVENCIÓN')) {{
+                    for (var j=0; j<selects[i].options.length; j++) {{
+                        if (selects[i].options[j].text.trim() === tipo) {{
+                            selects[i].selectedIndex = j;
+                            selects[i].dispatchEvent(new Event('change', {{bubbles:true}}));
+                            return 'ok:' + selects[i].id;
+                        }}
+                    }}
+                }}
+            }}
+            return 'not_found';
+        }}
+        """, tipo_trabajo)
+        print(f"  Tipo trabajo: {tipo_trabajo} → {r}")
+        await opat_page.wait_for_timeout(300)
 
         # ── SE O LÍNEA ────────────────────────────────────────────────────────
         if datos.get("se_linea"):
-            se_input = modal.locator('input[placeholder*="SE"], input[placeholder*="Línea"]').first
-            await se_input.fill(datos["se_linea"])
+            r = await opat_page.evaluate(f"""
+            (val) => {{
+                var modal = document.getElementById('modalEditarPT');
+                // SE o Línea: buscar input de texto cerca del label "SE o Línea"
+                var labels = Array.from(modal.querySelectorAll('label'));
+                for (var i=0; i<labels.length; i++) {{
+                    var lt = (labels[i].innerText || '').trim();
+                    if (lt.includes('SE') || lt.includes('L') && lt.includes('nea')) {{
+                        var forId = labels[i].getAttribute('for');
+                        if (forId) {{
+                            var el = document.getElementById(forId);
+                            if (el) {{
+                                el.value = val;
+                                el.dispatchEvent(new Event('input', {{bubbles:true}}));
+                                el.dispatchEvent(new Event('change', {{bubbles:true}}));
+                                return 'ok:' + forId;
+                            }}
+                        }}
+                    }}
+                }}
+                // Fallback: buscar por placeholder vacío entre los inputs de texto
+                var inputs = Array.from(modal.querySelectorAll('input[type="text"]'));
+                for (var j=0; j<inputs.length; j++) {{
+                    var ph = (inputs[j].placeholder || '').trim();
+                    if (ph === '' && inputs[j].offsetParent) {{
+                        inputs[j].value = val;
+                        inputs[j].dispatchEvent(new Event('input', {{bubbles:true}}));
+                        inputs[j].dispatchEvent(new Event('change', {{bubbles:true}}));
+                        return 'fallback_empty:' + inputs[j].id;
+                    }}
+                }}
+                return 'not_found';
+            }}
+            """, datos["se_linea"])
+            print(f"  SE o Línea: {datos['se_linea']} → {r}")
             await opat_page.wait_for_timeout(300)
-            print(f"  SE o Línea: {datos['se_linea']}")
 
         # ── ÁREA ZONAL ────────────────────────────────────────────────────────
-        area_input = modal.locator('input[placeholder*="Metropolitana"]').first
-        await area_input.fill("Área Mtto Zonal Metropolitana")
+        r = await opat_page.evaluate("""
+        (val) => {
+            var modal = document.getElementById('modalEditarPT');
+            var inputs = Array.from(modal.querySelectorAll('input[type="text"]'));
+            for (var i=0; i<inputs.length; i++) {
+                var ph = (inputs[i].placeholder || '').toLowerCase();
+                if (ph.includes('metropolitana') || ph.includes('area') || ph.includes('área')) {
+                    inputs[i].value = val;
+                    inputs[i].dispatchEvent(new Event('input', {bubbles:true}));
+                    inputs[i].dispatchEvent(new Event('change', {bubbles:true}));
+                    return 'ok:' + inputs[i].id;
+                }
+            }
+            return 'not_found';
+        }
+        """, "Área Mtto Zonal Metropolitana")
+        print(f"  Área Zonal → {r}")
         await opat_page.wait_for_timeout(300)
-        print("  Área Zonal: Área Mtto Zonal Metropolitana")
 
         # ── COMPONENTES ───────────────────────────────────────────────────────
         if datos.get("componentes"):
-            comp_input = modal.locator('input[placeholder*="52J"]').first
-            await comp_input.fill(datos["componentes"])
+            r = await opat_page.evaluate(f"""
+            (val) => {{
+                var modal = document.getElementById('modalEditarPT');
+                var inputs = Array.from(modal.querySelectorAll('input'));
+                for (var i=0; i<inputs.length; i++) {{
+                    var ph = (inputs[i].placeholder || '').toLowerCase();
+                    if (ph.includes('52j') || ph.includes('componente')) {{
+                        inputs[i].value = val;
+                        inputs[i].dispatchEvent(new Event('input', {{bubbles:true}}));
+                        inputs[i].dispatchEvent(new Event('change', {{bubbles:true}}));
+                        return 'ok:' + inputs[i].id;
+                    }}
+                }}
+                return 'not_found';
+            }}
+            """, datos["componentes"])
+            print(f"  Componentes → {r}")
             await opat_page.wait_for_timeout(300)
-            print(f"  Componentes: {datos['componentes'][:50]}")
 
         # ── DESCRIPCIÓN / OBJETIVO GENERAL ───────────────────────────────────
         if datos.get("descripcion"):
-            desc_textarea = modal.locator('textarea').first
-            await desc_textarea.fill(datos["descripcion"])
+            r = await opat_page.evaluate(f"""
+            (val) => {{
+                var modal = document.getElementById('modalEditarPT');
+                var textareas = Array.from(modal.querySelectorAll('textarea'));
+                if (textareas[0]) {{
+                    textareas[0].value = val;
+                    textareas[0].dispatchEvent(new Event('input', {{bubbles:true}}));
+                    textareas[0].dispatchEvent(new Event('change', {{bubbles:true}}));
+                    return 'ok:' + textareas[0].id;
+                }}
+                return 'not_found';
+            }}
+            """, datos["descripcion"])
+            print(f"  Descripción → {r}")
             await opat_page.wait_for_timeout(300)
-            print(f"  Descripción: {datos['descripcion'][:60]}...")
 
         await screenshot(opat_page, f"opat_pre_guardar_{pt_id}")
 
