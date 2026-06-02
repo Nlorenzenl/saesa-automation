@@ -26,7 +26,7 @@ OPAT_PASS  = os.environ["OPAT_PASS"]
 GMAIL_USER = os.environ["GMAIL_USER"]
 GMAIL_PASS = os.environ["GMAIL_APP_PASS"]
 EMAIL_DEST = os.environ["EMAIL_DEST"]
-EMAIL_CC   = ["nicolas.lorenzen@saesa.cl"]
+EMAIL_CC   = ["alexis.aedo@saesa.cl", "jorge.canete@saesa.cl"]
 
 DRY_RUN          = os.environ.get("DRY_RUN", "true").lower() == "true"
 MAX_APROBACIONES = int(os.environ.get("MAX_APROBACIONES", "50"))
@@ -523,15 +523,20 @@ async def hacer_login_opat(opat_page):
     await screenshot(opat_page, "opat_login")
 
     # Buscar campos de login
-    usuario = await opat_page.query_selector('input[name="username"], input[type="text"], input[name="user"]')
+    # Campo "Nombre de Usuario" (placeholder "Ej. admin")
+    usuario = await opat_page.query_selector(
+        'input[placeholder*="admin"], input[placeholder*="Usuario"], '
+        'input[placeholder*="usuario"], input[type="text"]'
+    )
     if usuario:
         await usuario.fill(OPAT_USER)
 
-    password = await opat_page.query_selector('input[name="password"], input[type="password"]')
+    # Campo Contraseña
+    password = await opat_page.query_selector('input[type="password"]')
     if password:
         await password.fill(OPAT_PASS)
 
-    await opat_page.click('button[type="submit"], input[type="submit"], button:has-text("Iniciar"), button:has-text("Login"), button:has-text("Entrar")')
+    await opat_page.click('button:has-text("Ingresar al Sistema")')
     await opat_page.wait_for_load_state("networkidle", timeout=30_000)
     await opat_page.wait_for_timeout(2000)
     await screenshot(opat_page, "opat_post_login")
