@@ -973,8 +973,23 @@ async def subir_pt_a_opat(opat_page, datos):
         await screenshot(opat_page, f"opat_pre_guardar_{pt_id}")
 
         # ── GUARDAR Y CERRAR ──────────────────────────────────────────────────
-        guardar_btn = modal.locator('button:has-text("Guardar y Cerrar"), button:has-text("Guardar")').first
-        await guardar_btn.click(timeout=10_000)
+        # Usar JS para hacer click en el botón Guardar y Cerrar dentro del modal
+        r_guardar = await opat_page.evaluate("""
+        () => {
+            var modal = document.getElementById('modalEditarPT');
+            if (!modal) return 'no_modal';
+            var btns = Array.from(modal.querySelectorAll('button'));
+            for (var i=0; i<btns.length; i++) {
+                var t = (btns[i].innerText || btns[i].textContent || '').trim();
+                if (t.includes('Guardar')) {
+                    btns[i].click();
+                    return 'ok:' + t;
+                }
+            }
+            return 'not_found';
+        }
+        """)
+        print(f"  Guardar: {r_guardar}")
         await opat_page.wait_for_timeout(3000)
         await screenshot(opat_page, f"opat_post_guardar_{pt_id}")
 
