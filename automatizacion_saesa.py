@@ -547,6 +547,73 @@ async def hacer_login_opat(opat_page):
 # SUBIR PT A OPAT
 # =============================================================================
 
+async def cerrar_modal_opat(opat_page):
+    """Cierra el modal de OPAT si está abierto, via JS directo."""
+    try:
+        await opat_page.evaluate("""
+        () => {
+            // Cerrar modal Bootstrap via JS
+            var modal = document.getElementById('modalEditarPT');
+            if (modal && modal.classList.contains('show')) {
+                // Usar Bootstrap JS si está disponible
+                if (window.bootstrap && window.bootstrap.Modal) {
+                    var m = window.bootstrap.Modal.getInstance(modal);
+                    if (m) { m.hide(); return 'bootstrap_hide'; }
+                }
+                // Fallback: manipular DOM directamente
+                modal.classList.remove('show');
+                modal.style.display = 'none';
+                modal.setAttribute('aria-hidden', 'true');
+                modal.removeAttribute('aria-modal');
+                // Quitar backdrop
+                var backdrops = document.querySelectorAll('.modal-backdrop');
+                backdrops.forEach(function(b) { b.remove(); });
+                document.body.classList.remove('modal-open');
+                document.body.style.overflow = '';
+                document.body.style.paddingRight = '';
+                return 'dom_manipulated';
+            }
+            return 'not_open';
+        }
+        """)
+        await opat_page.wait_for_timeout(800)
+    except Exception as e:
+        print(f"  cerrar_modal_opat error: {e}")
+
+
+async def abrir_nuevo_pt_opat(opat_page):
+    """Abre el formulario Nuevo PT via JS para evitar problemas de intercepción."""
+    try:
+        # Primero cerrar cualquier modal abierto
+        await cerrar_modal_opat(opat_page)
+        await opat_page.wait_for_timeout(500)
+
+        # Intentar click normal primero
+        try:
+            await opat_page.click(
+                'button:has-text("Nuevo PT"), a:has-text("Nuevo PT")',
+                timeout=5000,
+                force=True
+            )
+        except Exception:
+            # Fallback: llamar la función JS directamente
+            await opat_page.evaluate("() => { if (typeof abrirNuevoPT === 'function') abrirNuevoPT(); }")
+
+        await opat_page.wait_for_timeout(2000)
+
+        # Verificar que el modal se abrió
+        modal_visible = await opat_page.evaluate("""
+        () => {
+            var modal = document.getElementById('modalEditarPT');
+            return modal && modal.classList.contains('show');
+        }
+        """)
+        return modal_visible
+    except Exception as e:
+        print(f"  abrir_nuevo_pt_opat error: {e}")
+        return False
+
+
 async def subir_pt_a_opat(opat_page, datos):
     """
     Abre el formulario Nuevo PT en OPAT y llena todos los campos.
@@ -561,106 +628,87 @@ async def subir_pt_a_opat(opat_page, datos):
             await opat_page.goto(OPAT_URL, wait_until="domcontentloaded", timeout=30_000)
             await opat_page.wait_for_timeout(2000)
 
-        # Click en "+ Nuevo PT"
-        await opat_page.wait_for_selector(
-            'button:has-text("Nuevo PT"), a:has-text("Nuevo PT"), *:has-text("+ Nuevo PT")',
-            timeout=TIMEOUT
-        )
-        await opat_page.click(
-            'button:has-text("Nuevo PT"), a:has-text("Nuevo PT"), *:has-text("+ Nuevo PT")'
-        )
-        await opat_page.wait_for_timeout(2000)
+        # Abrir formulario Nuevo PT (con cierre de modal previo)
+        modal_ok = await abrir_nuevo_pt_opat(opat_page)
+        print(f"  modal abierto: {modal_ok}")
         await screenshot(opat_page, f"opat_form_{pt_id}")
 
+        # Trabajar dentro del modal #modalEditarPT
+        modal = opat_page.locator('#modalEditarPT')
+
         # ── N° PT ──────────────────────────────────────────────────────────────
-        campo_npt = await opat_page.query_selector(
+        campo_npt = modal.locator(
             'input[placeholder*="Automático"], input[placeholder*="ingrese"], input[placeholder*="PT"]'
-        )
-        if campo_npt:
-            await campo_npt.clear()
-            await campo_npt.fill(pt_id)
-            await opat_page.wait_for_timeout(500)
+        ).first
+        await campo_npt.fill("")
+        await campo_npt.fill(pt_id)
+        await opat_page.wait_for_timeout(500)
         print(f"  N° PT: {pt_id}")
 
         # ── ZONA → Metropolitana ───────────────────────────────────────────────
-        zona_select = opat_page.locator('select', has_text="Seleccione Zona").first
+        zona_select = modal.locator('select').filter(has_text="Seleccione Zona").first
         await zona_select.select_option(label="Metropolitana")
         await opat_page.wait_for_timeout(500)
         print("  Zona: Metropolitana")
 
         # ── FECHA INICIO ──────────────────────────────────────────────────────
         if datos.get("fecha_inicio"):
-            fecha_inicio_input = opat_page.locator('input[type="date"]').first
-            await fecha_inicio_input.fill(
-                datetime.strptime(datos["fecha_inicio"], "%m/%d/%Y").strftime("%Y-%m-%d")
-            )
+            fecha_str = datetime.strptime(datos["fecha_inicio"], "%m/%d/%Y").strftime("%Y-%m-%d")
+            await modal.locator('input[type="date"]').first.fill(fecha_str)
             await opat_page.wait_for_timeout(300)
             print(f"  Fecha inicio: {datos['fecha_inicio']}")
 
         # ── HORA INICIO ───────────────────────────────────────────────────────
         if datos.get("hora_inicio"):
-            hora_inicio_input = opat_page.locator('input[type="time"]').first
             dt_hora = datetime.strptime(datos["hora_inicio"], "%I:%M %p")
-            await hora_inicio_input.fill(dt_hora.strftime("%H:%M"))
+            await modal.locator('input[type="time"]').first.fill(dt_hora.strftime("%H:%M"))
             await opat_page.wait_for_timeout(300)
             print(f"  Hora inicio: {datos['hora_inicio']}")
 
         # ── FECHA FIN ─────────────────────────────────────────────────────────
         if datos.get("fecha_fin"):
-            fecha_fin_input = opat_page.locator('input[type="date"]').nth(1)
-            await fecha_fin_input.fill(
-                datetime.strptime(datos["fecha_fin"], "%m/%d/%Y").strftime("%Y-%m-%d")
-            )
+            fecha_fin_str = datetime.strptime(datos["fecha_fin"], "%m/%d/%Y").strftime("%Y-%m-%d")
+            await modal.locator('input[type="date"]').nth(1).fill(fecha_fin_str)
             await opat_page.wait_for_timeout(300)
             print(f"  Fecha fin: {datos['fecha_fin']}")
 
         # ── HORA FIN ──────────────────────────────────────────────────────────
         if datos.get("hora_fin"):
-            hora_fin_input = opat_page.locator('input[type="time"]').nth(1)
             dt_hora_fin = datetime.strptime(datos["hora_fin"], "%I:%M %p")
-            await hora_fin_input.fill(dt_hora_fin.strftime("%H:%M"))
+            await modal.locator('input[type="time"]').nth(1).fill(dt_hora_fin.strftime("%H:%M"))
             await opat_page.wait_for_timeout(300)
             print(f"  Hora fin: {datos['hora_fin']}")
 
         # ── TIPO TRABAJO ──────────────────────────────────────────────────────
         tipo_trabajo = datos.get("tipo_trabajo", "DESCONEXIÓN")
-        tipo_select  = opat_page.locator('select', has_text="DESCONEXIÓN").first
+        tipo_select  = modal.locator('select').filter(has_text="DESCONEXIÓN").first
         await tipo_select.select_option(label=tipo_trabajo)
         await opat_page.wait_for_timeout(500)
         print(f"  Tipo trabajo: {tipo_trabajo}")
 
         # ── SE O LÍNEA ────────────────────────────────────────────────────────
         if datos.get("se_linea"):
-            se_input = await opat_page.query_selector(
-                'input[placeholder*="SE"], input[placeholder*="Línea"], input[placeholder*="Linea"]'
-            )
-            if se_input:
-                await se_input.fill(datos["se_linea"])
-                await opat_page.wait_for_timeout(300)
+            se_input = modal.locator('input[placeholder*="SE"], input[placeholder*="Línea"]').first
+            await se_input.fill(datos["se_linea"])
+            await opat_page.wait_for_timeout(300)
             print(f"  SE o Línea: {datos['se_linea']}")
 
         # ── ÁREA ZONAL ────────────────────────────────────────────────────────
-        area_input = await opat_page.query_selector(
-            'input[placeholder*="Metropolitana"], input[placeholder*="Area"], input[placeholder*="Área"]'
-        )
-        if area_input:
-            await area_input.fill("Área Mtto Zonal Metropolitana")
-            await opat_page.wait_for_timeout(300)
+        area_input = modal.locator('input[placeholder*="Metropolitana"]').first
+        await area_input.fill("Área Mtto Zonal Metropolitana")
+        await opat_page.wait_for_timeout(300)
         print("  Área Zonal: Área Mtto Zonal Metropolitana")
 
         # ── COMPONENTES ───────────────────────────────────────────────────────
         if datos.get("componentes"):
-            comp_input = await opat_page.query_selector(
-                'input[placeholder*="52J"], input[placeholder*="Componente"]'
-            )
-            if comp_input:
-                await comp_input.fill(datos["componentes"])
-                await opat_page.wait_for_timeout(300)
+            comp_input = modal.locator('input[placeholder*="52J"]').first
+            await comp_input.fill(datos["componentes"])
+            await opat_page.wait_for_timeout(300)
             print(f"  Componentes: {datos['componentes'][:50]}")
 
         # ── DESCRIPCIÓN / OBJETIVO GENERAL ───────────────────────────────────
         if datos.get("descripcion"):
-            desc_textarea = opat_page.locator('textarea').first
+            desc_textarea = modal.locator('textarea').first
             await desc_textarea.fill(datos["descripcion"])
             await opat_page.wait_for_timeout(300)
             print(f"  Descripción: {datos['descripcion'][:60]}...")
@@ -668,18 +716,22 @@ async def subir_pt_a_opat(opat_page, datos):
         await screenshot(opat_page, f"opat_pre_guardar_{pt_id}")
 
         # ── GUARDAR Y CERRAR ──────────────────────────────────────────────────
-        await opat_page.click(
-            'button:has-text("Guardar y Cerrar"), button:has-text("Guardar")'
-        )
+        guardar_btn = modal.locator('button:has-text("Guardar y Cerrar"), button:has-text("Guardar")').first
+        await guardar_btn.click(timeout=10_000)
         await opat_page.wait_for_timeout(3000)
         await screenshot(opat_page, f"opat_post_guardar_{pt_id}")
 
-        # Verificar que se guardó (el modal se cerró)
-        modal_abierto = await opat_page.query_selector(
-            'text="Detalle de Maniobra"'
-        )
-        if modal_abierto:
-            print(f"    ADVERTENCIA: modal sigue abierto para {pt_id}")
+        # Verificar que el modal se cerró
+        modal_aun_abierto = await opat_page.evaluate("""
+        () => {
+            var m = document.getElementById('modalEditarPT');
+            return m && m.classList.contains('show');
+        }
+        """)
+
+        if modal_aun_abierto:
+            print(f"  ADVERTENCIA: modal sigue abierto para {pt_id}")
+            await cerrar_modal_opat(opat_page)
             return False
 
         print(f"  ✓ PT {pt_id} subido a OPAT exitosamente")
@@ -688,6 +740,8 @@ async def subir_pt_a_opat(opat_page, datos):
     except Exception as e:
         print(f"  ERROR subiendo {pt_id} a OPAT: {e}")
         await screenshot(opat_page, f"opat_error_{pt_id}")
+        # Intentar cerrar modal para no bloquear el siguiente PT
+        await cerrar_modal_opat(opat_page)
         return False
 
 
