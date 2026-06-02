@@ -518,7 +518,16 @@ async def leer_detalle_pt(page, frame, pt_id):
 
 async def hacer_login_opat(opat_page):
     print("\n[OPAT] LOGIN")
-    await opat_page.goto(OPAT_URL, wait_until="domcontentloaded", timeout=60_000)
+    # Reintentar hasta 3 veces si hay timeout
+    for intento in range(3):
+        try:
+            await opat_page.goto(OPAT_URL, wait_until="domcontentloaded", timeout=120_000)
+            break
+        except Exception as e:
+            print(f"  OPAT goto intento {intento+1} falló: {e}")
+            if intento == 2:
+                raise
+            await opat_page.wait_for_timeout(5000)
     await opat_page.wait_for_timeout(3000)
     await screenshot(opat_page, "opat_login")
 
@@ -625,7 +634,15 @@ async def subir_pt_a_opat(opat_page, datos):
     try:
         # Asegurarse de estar en la página principal de OPAT
         if "agendaopat" not in opat_page.url:
-            await opat_page.goto(OPAT_URL, wait_until="domcontentloaded", timeout=30_000)
+            for intento in range(3):
+                try:
+                    await opat_page.goto(OPAT_URL, wait_until="domcontentloaded", timeout=120_000)
+                    break
+                except Exception as e:
+                    print(f"  OPAT goto intento {intento+1} falló: {e}")
+                    if intento == 2:
+                        raise
+                    await opat_page.wait_for_timeout(5000)
             await opat_page.wait_for_timeout(2000)
 
         # Abrir formulario Nuevo PT (con cierre de modal previo)
