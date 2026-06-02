@@ -15,28 +15,31 @@ from playwright.async_api import async_playwright
 # =============================================================================
 
 SAESA_URL = "https://stx.saesa.cl:8091/backend/sts/login.php?backurl=%2Fbackend%2Fsts%2Fcentrality.php"
+OPAT_URL  = "https://opat.cl/agendaopat/"
 
 SAESA_USER = os.environ["SAESA_USER"]
 SAESA_PASS = os.environ["SAESA_PASS"]
 
+OPAT_USER  = os.environ["OPAT_USER"]
+OPAT_PASS  = os.environ["OPAT_PASS"]
+
 GMAIL_USER = os.environ["GMAIL_USER"]
 GMAIL_PASS = os.environ["GMAIL_APP_PASS"]
 EMAIL_DEST = os.environ["EMAIL_DEST"]
+EMAIL_CC   = ["alexis.aedo@saesa.cl", "jorge.canete@saesa.cl"]
 
-# Destinatarios adicionales CC
-EMAIL_CC = ["nicolas.lorenzen@saesa.cl", "jorge.canete@saesa.cl", "alexis.aedo@saesa.cl", "jeanine.valenzuela@saesa.cl"]
-
-DRY_RUN = os.environ.get("DRY_RUN", "true").lower() == "true"
+DRY_RUN          = os.environ.get("DRY_RUN", "true").lower() == "true"
 MAX_APROBACIONES = int(os.environ.get("MAX_APROBACIONES", "50"))
 
-TIMEOUT = 30_000
+TIMEOUT   = 30_000
+TZ_CHILE  = ZoneInfo("America/Santiago")
+
 ESTADO_EXACTO = "Revisión y Autorización PCCT"
 AREA_KEYWORDS = ["metropolitana"]
-TZ_CHILE = ZoneInfo("America/Santiago")
 
 
 # =============================================================================
-# JS HELPERS
+# JS HELPERS — CENTRALITY
 # =============================================================================
 
 JS_READ_ROWS = """
@@ -65,10 +68,7 @@ JS_GET_TOTAL_PAGES = """
 JS_NEXT_PAGE = """
 () => {
     var btn = document.querySelector(".x-tbar-page-next:not(.x-item-disabled)");
-    if (btn) {
-        btn.click();
-        return true;
-    }
+    if (btn) { btn.click(); return true; }
     return false;
 }
 """
@@ -76,10 +76,7 @@ JS_NEXT_PAGE = """
 JS_REFRESH_GRID = """
 () => {
     var btn = document.querySelector(".x-tbar-loading");
-    if (btn) {
-        btn.click();
-        return true;
-    }
+    if (btn) { btn.click(); return true; }
     return false;
 }
 """
@@ -92,17 +89,10 @@ JS_CHECK_BTN_APROBAR = """
         if (!el.offsetParent) continue;
         var txt = (el.innerText || el.textContent || "").trim();
         if (txt !== "Aprobar") continue;
-
         var disabled = el.classList.contains("x-item-disabled") ||
                        !!(el.closest && el.closest(".x-item-disabled"));
-
-        return {
-            found: true,
-            disabled: disabled,
-            cls: String(el.className).substring(0, 100)
-        };
+        return {found: true, disabled: disabled};
     }
-
     return {found: false};
 }
 """
@@ -112,103 +102,61 @@ JS_CLICK_BTN_APROBAR = """
     const candidatos = Array.from(
         document.querySelectorAll("button.x-btn-text, .x-btn-text, button")
     ).filter(el => el.offsetParent);
-
     for (const el of candidatos) {
         const txt = (el.innerText || el.textContent || "").trim();
-
         if (txt === "Aprobar") {
             el.click();
-
-            return {
-                clicked: true,
-                tag: el.tagName,
-                cls: String(el.className || ""),
-                text: txt
-            };
+            return {clicked: true, tag: el.tagName};
         }
     }
-
-    return {clicked: false, msg: "No encontré botón real Aprobar"};
+    return {clicked: false};
 }
 """
 
 JS_DETECT_POPUP = """
 () => {
-    var headers = Array.from(document.querySelectorAll(".x-window-header-text, .x-panel-header-text"));
-
+    var headers = Array.from(document.querySelectorAll(
+        ".x-window-header-text, .x-panel-header-text"
+    ));
     for (var i = 0; i < headers.length; i++) {
         var h = headers[i];
         if (!h.offsetParent) continue;
-
         var txt = (h.innerText || h.textContent || "").trim();
-
         if (txt === "Aprobar") {
             var win = h.closest(".x-window");
             if (!win || !win.offsetParent) continue;
-
             var r = win.getBoundingClientRect();
-
-            return {
-                found: true,
-                x: Math.round(r.x),
-                y: Math.round(r.y),
-                w: Math.round(r.width),
-                h: Math.round(r.height)
-            };
+            return {found: true, x: Math.round(r.x), y: Math.round(r.y)};
         }
     }
-
     return {found: false};
 }
 """
 
 JS_CLICK_ACEPTAR = """
 () => {
-    var headers = Array.from(document.querySelectorAll(".x-window-header-text, .x-panel-header-text"));
-
+    var headers = Array.from(document.querySelectorAll(
+        ".x-window-header-text, .x-panel-header-text"
+    ));
     for (var i = 0; i < headers.length; i++) {
         var h = headers[i];
         if (!h.offsetParent) continue;
-
-        var txt = (h.innerText || h.textContent || "").trim();
-
-        if (txt !== "Aprobar") continue;
-
+        if ((h.innerText || h.textContent || "").trim() !== "Aprobar") continue;
         var win = h.closest(".x-window");
         if (!win || !win.offsetParent) continue;
-
         var ta = win.querySelector("textarea");
         if (ta) {
             ta.value = "";
-            ta.dispatchEvent(new Event("input", { bubbles: true }));
-            ta.dispatchEvent(new Event("change", { bubbles: true }));
+            ta.dispatchEvent(new Event("input", {bubbles: true}));
+            ta.dispatchEvent(new Event("change", {bubbles: true}));
         }
-
-        var btns = Array.from(win.querySelectorAll("button"));
-
+        var btns = Array.from(win.querySelectorAll("button,.x-btn"));
         for (var j = 0; j < btns.length; j++) {
-            var btxt = (btns[j].innerText || btns[j].textContent || "").trim();
-
-            if (btxt === "Aceptar") {
-                btns[j].click();
-                return {ok: true, via: "button"};
-            }
+            var t = (btns[j].innerText || btns[j].textContent || "").trim();
+            if (t === "Aceptar") { btns[j].click(); return {ok: true}; }
         }
-
-        var xbtns = Array.from(win.querySelectorAll(".x-btn"));
-
-        for (var k = 0; k < xbtns.length; k++) {
-            var xbtxt = (xbtns[k].innerText || xbtns[k].textContent || "").trim();
-
-            if (xbtxt === "Aceptar") {
-                xbtns[k].click();
-                return {ok: true, via: "x-btn"};
-            }
-        }
-
         return {ok: false, win_found: true};
     }
-
     return {ok: false, win_found: false};
 }
 """
@@ -216,9 +164,49 @@ JS_CLICK_ACEPTAR = """
 JS_PT_EXISTE = """
 (ptId) => {
     var cells = Array.from(document.querySelectorAll(".x-grid3-cell-inner"));
-    return cells.some(function(c) {
-        return c.innerText.trim() === ptId;
-    });
+    return cells.some(function(c) { return c.innerText.trim() === ptId; });
+}
+"""
+
+# Lee el detalle completo del PT seleccionado en el panel inferior de Centrality
+JS_LEER_DETALLE_PT = """
+() => {
+    // El detalle aparece en el panel inferior con etiquetas y valores
+    var detalle = {};
+
+    // Buscar todas las celdas de la tabla de detalle
+    var celdas = Array.from(document.querySelectorAll(
+        ".x-panel-body table td, .x-grid3-body td"
+    ));
+
+    var campos = [
+        "Identificador", "Fecha de recepción", "Tipo de permiso de trabajo",
+        "Instalación", "Instalación a intervenir", "Detalle de instalación",
+        "Solicitante de PT", "Estado", "Comentarios del cierre",
+        "Creador", "Desde", "Hasta",
+        "Modificación al esquema eléctrico", "Observaciones", "Elemento referencia",
+        "Jerarquía de red", "Área de cobertura", "Área de mantenimiento",
+        "Dirección", "Sector afectado", "Descripción del trabajo general",
+        "Sectores sin suministro", "Modifica instalaciones", "Área",
+        "Caso", "Editable por", "Responsable del caso",
+        "Fuera de plazo", "Requiere planificación de faena", "Requiere evaluación de riesgos"
+    ];
+
+    // Buscar en el DOM del panel de detalle
+    var panelDetalle = document.querySelector(".x-panel-body");
+    if (!panelDetalle) return detalle;
+
+    var tds = Array.from(panelDetalle.querySelectorAll("td"));
+
+    for (var i = 0; i < tds.length - 1; i++) {
+        var label = (tds[i].innerText || "").trim().replace(/:$/, "");
+        if (campos.indexOf(label) >= 0) {
+            var valor = (tds[i + 1].innerText || "").trim();
+            detalle[label] = valor;
+        }
+    }
+
+    return detalle;
 }
 """
 
@@ -229,16 +217,11 @@ JS_PT_EXISTE = """
 
 async def screenshot(page, nombre):
     os.makedirs("capturas", exist_ok=True)
-
-    ts = datetime.now().strftime("%H%M%S")
+    ts   = datetime.now().strftime("%H%M%S")
     safe = re.sub(r"[^a-zA-Z0-9_-]", "_", nombre)
-
     path = f"capturas/{safe}_{ts}.png"
-
     await page.screenshot(path=path, full_page=False)
-
     print(f"    captura: {path}")
-
     return path
 
 
@@ -251,137 +234,119 @@ def es_metropolitana(area):
 
 
 def es_estado_pcct_exacto(estado):
-    e = normalizar(estado)
-    return e == ESTADO_EXACTO
+    return normalizar(estado) == ESTADO_EXACTO
 
 
 def extraer_info_fila(row):
-    id_pt = ""
-    area_pt = ""
-    estado_pt = ""
-
+    id_pt = area_pt = estado_pt = ""
     for cell in row:
         c = normalizar(cell)
-
         if re.match(r"^\d{4}-\d{5}$", c):
             id_pt = c
             continue
-
         if "Revisión y Autorización" in c or "Revision y Autorizacion" in c:
             estado_pt = c
             continue
-
         posibles_areas = [
-            "metropolitana",
-            "osorno",
-            "antofagasta",
-            "chiloe",
-            "chiloé",
-            "copiapo",
-            "copiapó",
-            "llvv",
-            "scada",
-            "temuco",
-            "puerto montt",
-            "transemel",
-            "protecciones",
-            "proyectos",
-            "mayor zonal",
-            "zonal",
-            "mantenimiento",
+            "metropolitana", "osorno", "antofagasta", "chiloe", "chiloé",
+            "copiapo", "copiapó", "llvv", "scada", "temuco", "puerto montt",
+            "transemel", "protecciones", "proyectos", "mayor zonal",
+            "zonal", "mantenimiento",
         ]
-
         if any(k in c.lower() for k in posibles_areas) and not area_pt:
             area_pt = c
-
     return id_pt, area_pt, estado_pt
 
 
+def determinar_tipo_trabajo(tipo_pt_texto):
+    """Mapea el tipo de PT de Centrality al tipo en OPAT."""
+    t = (tipo_pt_texto or "").upper()
+    if "DESCONEX" in t:
+        return "DESCONEXIÓN"
+    if "INTERVEN" in t:
+        return "INTERVENCIÓN"
+    return "DESCONEXIÓN"  # default
+
+
+def parsear_fecha_hora(texto):
+    """
+    Parsea 'DD/MM/YYYY HH:MM:SS' o 'DD/MM/YYYY HH:MM' o '01/06/2026 09:00:00'
+    Devuelve (fecha_mm_dd_yyyy, hora_hh_mm_ampm) para OPAT.
+    Ej: ('06/01/2026', '09:00 AM')
+    """
+    try:
+        texto = normalizar(texto)
+        # Intentar varios formatos
+        for fmt in ["%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"]:
+            try:
+                dt = datetime.strptime(texto, fmt)
+                fecha = dt.strftime("%m/%d/%Y")   # OPAT usa mm/dd/yyyy
+                hora  = dt.strftime("%I:%M %p")    # ej: 09:00 AM
+                return fecha, hora
+            except ValueError:
+                continue
+    except Exception:
+        pass
+    return None, None
+
+
 # =============================================================================
-# LOGIN
+# LOGIN CENTRALITY
 # =============================================================================
 
-async def hacer_login(page):
-    print("\n[1] LOGIN")
-
+async def hacer_login_centrality(page):
+    print("\n[1] LOGIN CENTRALITY")
     await page.goto(SAESA_URL, wait_until="domcontentloaded", timeout=60_000)
     await page.wait_for_timeout(3000)
-
     usuario = await page.query_selector('input[name="user"], input[type="text"]')
     if usuario:
         await usuario.fill(SAESA_USER)
-
     password = await page.query_selector('input[name="pass"], input[type="password"]')
     if password:
         await password.fill(SAESA_PASS)
-
     await page.click('input[value="Login"], button:has-text("Login"), input[type="submit"]')
     await page.wait_for_load_state("networkidle", timeout=30_000)
     await page.wait_for_timeout(2500)
-
-    print("  OK: sesión iniciada")
+    print("  OK: sesión Centrality iniciada")
 
 
 # =============================================================================
-# NAVEGACIÓN
+# NAVEGACIÓN CENTRALITY
 # =============================================================================
 
 async def navegar_a_permisos(page):
     print("\n[2] NAVEGACION")
-
     await page.wait_for_selector(
-        'a:has-text("Aplicaciones"), span:has-text("Aplicaciones")',
-        timeout=TIMEOUT,
-    )
-
+        'a:has-text("Aplicaciones"), span:has-text("Aplicaciones")', timeout=TIMEOUT)
     await page.click('a:has-text("Aplicaciones"), span:has-text("Aplicaciones")')
     await page.wait_for_timeout(1500)
-
-    print("  -> Aplicaciones")
-
     await page.wait_for_selector('a:has-text("DMS")', timeout=TIMEOUT)
     await page.click('a:has-text("DMS")')
-
     await page.wait_for_load_state("networkidle", timeout=30_000)
     await page.wait_for_timeout(3000)
-
     print("  -> DMS cargado")
-    await screenshot(page, "nav_01_dms")
 
     frame = page
-
     for f in page.frames:
         try:
             if f.name == "content":
                 frame = f
-                print("  frame detectado: content")
                 break
-
             el = await f.query_selector('text="Planificación"')
             if el:
                 frame = f
-                print(f"  frame detectado por selector: {f.name}")
                 break
-
         except Exception:
             pass
 
     await frame.wait_for_selector('text="Planificación"', timeout=TIMEOUT)
     await frame.click('text="Planificación"')
     await page.wait_for_timeout(1000)
-
-    print("  -> menú Planificación abierto")
-    await screenshot(page, "nav_02_planificacion")
-
     await frame.wait_for_selector('text="Permisos de trabajo"', timeout=TIMEOUT)
     await frame.click('text="Permisos de trabajo"')
-
     await page.wait_for_load_state("networkidle", timeout=30_000)
     await page.wait_for_timeout(3500)
-
     print("  -> Permisos de trabajo")
-    await screenshot(page, "nav_03_permisos")
-
     return frame
 
 
@@ -391,270 +356,386 @@ async def navegar_a_permisos(page):
 
 async def aplicar_filtro_pcct(page, frame):
     print("\n[3] FILTRO")
-
     await frame.click('text=Filtro')
     await page.wait_for_timeout(2000)
-    await screenshot(page, "filtro_01_abierto")
-
-    # =========================================================
-    # ABRIR COMBO ESTADO — usando elementFromPoint en la fila
-    # del label "Estado:" dentro del panel Filtros
-    # =========================================================
 
     r_estado = await frame.evaluate("""
     () => {
         const win = Array.from(document.querySelectorAll(".x-window"))
             .filter(w => w.offsetParent && (w.innerText || "").includes("Filtros"))[0];
-
-        if (!win) {
-            return { ok:false, msg:"No encontré ventana Filtros" };
-        }
-
-        const labels = Array.from(
-            win.querySelectorAll("label,td,div,span,b")
-        ).filter(el => el.offsetParent);
-
+        if (!win) return {ok:false, msg:"No encontré ventana Filtros"};
+        const labels = Array.from(win.querySelectorAll("label,td,div,span,b"))
+            .filter(el => el.offsetParent);
         let estadoLabel = null;
-
         for (const el of labels) {
-            const txt = (el.innerText || "").trim();
-            if (txt === "Estado:") {
-                estadoLabel = el;
-                break;
-            }
+            if ((el.innerText || "").trim() === "Estado:") { estadoLabel = el; break; }
         }
-
-        if (!estadoLabel) {
-            return { ok:false, msg:"No encontré label Estado:" };
-        }
-
+        if (!estadoLabel) return {ok:false, msg:"No encontré label Estado:"};
         const lr = estadoLabel.getBoundingClientRect();
         const wr = win.getBoundingClientRect();
-
         const y = lr.y + lr.height / 2;
         const x = wr.right - 22;
-
         const el = document.elementFromPoint(x, y);
-
-        if (!el) {
-            return {
-                ok:false,
-                msg:"elementFromPoint no encontró elemento",
-                x:Math.round(x),
-                y:Math.round(y)
-            };
-        }
-
+        if (!el) return {ok:false, msg:"elementFromPoint no encontró elemento"};
         el.click();
-
-        return {
-            ok:true,
-            x:Math.round(x),
-            y:Math.round(y),
-            labelY:Math.round(lr.y),
-            clickedTag:el.tagName,
-            clickedClass:String(el.className || "")
-        };
+        return {ok:true, x:Math.round(x), y:Math.round(y)};
     }
     """)
-
     print(f"  trigger Estado: {r_estado}")
-
     if not r_estado.get("ok"):
         raise RuntimeError(f"No se pudo abrir combo Estado: {r_estado}")
 
     await page.wait_for_timeout(1500)
-    await screenshot(page, "filtro_02_dropdown_estado")
-
-    # =========================================================
-    # SELECCIONAR "Revisión y Autorización PCCT"
-    # =========================================================
 
     r_pcct = await frame.evaluate("""
     () => {
-        // Buscar todos los items del combo abierto
-        const items = Array.from(
-            document.querySelectorAll(".x-combo-list-item")
-        ).filter(el => el.offsetParent);
-
-        const disponibles = items.map(el => (el.innerText || "").trim());
-
+        const items = Array.from(document.querySelectorAll(".x-combo-list-item"))
+            .filter(el => el.offsetParent);
         for (const item of items) {
             const raw = (item.innerText || "").trim();
-
-            // Buscar el item que contenga PCCT pero NO contenga FP ni JACCT
-            if (
-                raw.indexOf("PCCT") >= 0 &&
-                raw.indexOf("FP") < 0 &&
-                raw.indexOf("JACCT") < 0
-            ) {
+            if (raw.indexOf("PCCT") >= 0 && raw.indexOf("FP") < 0 && raw.indexOf("JACCT") < 0) {
                 item.scrollIntoView({block: "center"});
-                // Disparar mousedown + mouseup + click para ExtJS
-                var evt1 = new MouseEvent("mousedown", {bubbles:true, cancelable:true});
-                var evt2 = new MouseEvent("mouseup",   {bubbles:true, cancelable:true});
-                var evt3 = new MouseEvent("click",     {bubbles:true, cancelable:true});
-                item.dispatchEvent(evt1);
-                item.dispatchEvent(evt2);
-                item.dispatchEvent(evt3);
-                return {ok:true, texto:raw, disponibles:disponibles};
+                var e1 = new MouseEvent("mousedown", {bubbles:true, cancelable:true});
+                var e2 = new MouseEvent("mouseup",   {bubbles:true, cancelable:true});
+                var e3 = new MouseEvent("click",     {bubbles:true, cancelable:true});
+                item.dispatchEvent(e1);
+                item.dispatchEvent(e2);
+                item.dispatchEvent(e3);
+                return {ok:true, texto:raw};
             }
         }
-
-        return {ok:false, disponibles:disponibles};
+        return {ok:false};
     }
     """)
-
     print(f"  selección PCCT: {r_pcct}")
-
-    await page.wait_for_timeout(1000)
-    await screenshot(page, "filtro_03_pcct_seleccionado")
-
     if not r_pcct.get("ok"):
         raise RuntimeError(f"No se pudo seleccionar Estado PCCT: {r_pcct}")
 
-    # =========================================================
-    # CLICK EN APLICAR
-    # =========================================================
-
-    print("  Aplicar...")
+    await page.wait_for_timeout(1000)
 
     aplicar_btn = frame.locator("button.x-btn-text.apply", has_text="Aplicar").first
     await aplicar_btn.click(timeout=5000, force=True)
     await page.wait_for_timeout(8000)
-    await screenshot(page, "filtro_04_aplicado")
 
-    # Verificar si el filtro sigue abierto y reintentar
-    filtro_sigue_abierto = await frame.evaluate("""
+    filtro_abierto = await frame.evaluate("""
     () => {
         const win = Array.from(document.querySelectorAll(".x-window"))
             .filter(w => w.offsetParent && (w.innerText || "").includes("Filtros"))[0];
         return !!win;
     }
     """)
-
-    print(f"  filtro sigue abierto: {filtro_sigue_abierto}")
-
-    if filtro_sigue_abierto:
-        print("  Retry Aplicar...")
+    if filtro_abierto:
         await aplicar_btn.dblclick(timeout=5000, force=True)
         await page.wait_for_timeout(8000)
-        await screenshot(page, "filtro_04_aplicado_retry")
 
-    # Validar resultado
     info = await frame.evaluate("""
     () => {
         const rows = document.querySelectorAll(".x-grid3-row");
-        const pagText = Array.from(document.querySelectorAll("*"))
-            .filter(e =>
-                e.children.length === 0 &&
-                e.offsetParent &&
-                (e.innerText || "").indexOf("Mostrando") >= 0
-            )
+        const pag = Array.from(document.querySelectorAll("*"))
+            .filter(e => e.children.length===0 && e.offsetParent &&
+                         (e.innerText||"").indexOf("Mostrando")>=0)
             .map(e => e.innerText.trim());
-        return {filas_visibles: rows.length, paginador: pagText};
+        return {filas: rows.length, paginador: pag};
     }
     """)
-
     print(f"  resultado filtro: {info}")
-    return info
 
 
 # =============================================================================
-# SELECCIÓN REAL DE FILA
+# SELECCIÓN DE FILA
 # =============================================================================
 
 async def seleccionar_fila_pt(page, frame, pt_id):
     try:
-        row = frame.locator(".x-grid3-row", has_text=pt_id).first
-
+        row   = frame.locator(".x-grid3-row", has_text=pt_id).first
         await row.scroll_into_view_if_needed(timeout=5000)
         await page.wait_for_timeout(500)
-
         await row.click(timeout=5000, force=True)
         await page.wait_for_timeout(1200)
-
         celda = frame.locator(".x-grid3-cell-inner", has_text=pt_id).first
         await celda.click(timeout=5000, force=True)
         await page.wait_for_timeout(1200)
-
         selected = await row.evaluate("""
-        (el) => {
-            return (
-                el.classList.contains("x-grid3-row-selected") ||
+        (el) => el.classList.contains("x-grid3-row-selected") ||
                 el.className.includes("selected")
-            );
-        }
         """)
-
         return {"found": True, "selected": selected}
-
     except Exception as e:
         return {"found": False, "selected": False, "error": str(e)}
 
 
 # =============================================================================
-# APROBAR PTS
+# LEER DETALLE COMPLETO DEL PT EN CENTRALITY
 # =============================================================================
 
-async def aprobar_pts(page, frame):
-    print("\n[4] APROBANDO PTs")
+async def leer_detalle_pt(page, frame, pt_id):
+    """
+    Selecciona la fila y lee todos los campos del panel inferior de detalle.
+    Devuelve un dict con los datos necesarios para OPAT.
+    """
+    try:
+        # Asegurarse de que la fila esté seleccionada
+        await seleccionar_fila_pt(page, frame, pt_id)
+        await page.wait_for_timeout(1500)
+
+        detalle = await frame.evaluate(JS_LEER_DETALLE_PT)
+        print(f"    detalle leído: {list(detalle.keys())}")
+
+        # Extraer campos para OPAT
+        desde_raw = detalle.get("Desde", "")
+        hasta_raw = detalle.get("Hasta", "")
+
+        fecha_inicio, hora_inicio = parsear_fecha_hora(desde_raw)
+        fecha_fin,    hora_fin    = parsear_fecha_hora(hasta_raw)
+
+        tipo_pt_texto = detalle.get("Tipo de permiso de trabajo", "")
+        tipo_trabajo  = determinar_tipo_trabajo(tipo_pt_texto)
+
+        se_linea      = detalle.get("Elemento referencia", "")
+        componentes   = detalle.get("Detalle de instalación", "")
+        descripcion   = detalle.get("Descripción del trabajo general", "")
+
+        return {
+            "id":            pt_id,
+            "fecha_inicio":  fecha_inicio,
+            "hora_inicio":   hora_inicio,
+            "fecha_fin":     fecha_fin,
+            "hora_fin":      hora_fin,
+            "tipo_trabajo":  tipo_trabajo,
+            "se_linea":      se_linea,
+            "componentes":   componentes,
+            "descripcion":   descripcion,
+            "raw":           detalle,
+        }
+    except Exception as e:
+        print(f"    ERROR leyendo detalle: {e}")
+        return None
+
+
+# =============================================================================
+# LOGIN OPAT
+# =============================================================================
+
+async def hacer_login_opat(opat_page):
+    print("\n[OPAT] LOGIN")
+    await opat_page.goto(OPAT_URL, wait_until="domcontentloaded", timeout=60_000)
+    await opat_page.wait_for_timeout(3000)
+    await screenshot(opat_page, "opat_login")
+
+    # Buscar campos de login
+    usuario = await opat_page.query_selector('input[name="username"], input[type="text"], input[name="user"]')
+    if usuario:
+        await usuario.fill(OPAT_USER)
+
+    password = await opat_page.query_selector('input[name="password"], input[type="password"]')
+    if password:
+        await password.fill(OPAT_PASS)
+
+    await opat_page.click('button[type="submit"], input[type="submit"], button:has-text("Iniciar"), button:has-text("Login"), button:has-text("Entrar")')
+    await opat_page.wait_for_load_state("networkidle", timeout=30_000)
+    await opat_page.wait_for_timeout(2000)
+    await screenshot(opat_page, "opat_post_login")
+    print("  OK: sesión OPAT iniciada")
+
+
+# =============================================================================
+# SUBIR PT A OPAT
+# =============================================================================
+
+async def subir_pt_a_opat(opat_page, datos):
+    """
+    Abre el formulario Nuevo PT en OPAT y llena todos los campos.
+    Devuelve True si se guardó exitosamente, False en caso contrario.
+    """
+    pt_id = datos["id"]
+    print(f"\n[OPAT] Subiendo PT {pt_id}...")
+
+    try:
+        # Asegurarse de estar en la página principal de OPAT
+        if "agendaopat" not in opat_page.url:
+            await opat_page.goto(OPAT_URL, wait_until="domcontentloaded", timeout=30_000)
+            await opat_page.wait_for_timeout(2000)
+
+        # Click en "+ Nuevo PT"
+        await opat_page.wait_for_selector(
+            'button:has-text("Nuevo PT"), a:has-text("Nuevo PT"), *:has-text("+ Nuevo PT")',
+            timeout=TIMEOUT
+        )
+        await opat_page.click(
+            'button:has-text("Nuevo PT"), a:has-text("Nuevo PT"), *:has-text("+ Nuevo PT")'
+        )
+        await opat_page.wait_for_timeout(2000)
+        await screenshot(opat_page, f"opat_form_{pt_id}")
+
+        # ── N° PT ──────────────────────────────────────────────────────────────
+        campo_npt = await opat_page.query_selector(
+            'input[placeholder*="Automático"], input[placeholder*="ingrese"], input[placeholder*="PT"]'
+        )
+        if campo_npt:
+            await campo_npt.clear()
+            await campo_npt.fill(pt_id)
+            await opat_page.wait_for_timeout(500)
+        print(f"  N° PT: {pt_id}")
+
+        # ── ZONA → Metropolitana ───────────────────────────────────────────────
+        zona_select = opat_page.locator('select', has_text="Seleccione Zona").first
+        await zona_select.select_option(label="Metropolitana")
+        await opat_page.wait_for_timeout(500)
+        print("  Zona: Metropolitana")
+
+        # ── FECHA INICIO ──────────────────────────────────────────────────────
+        if datos.get("fecha_inicio"):
+            fecha_inicio_input = opat_page.locator('input[type="date"]').first
+            await fecha_inicio_input.fill(
+                datetime.strptime(datos["fecha_inicio"], "%m/%d/%Y").strftime("%Y-%m-%d")
+            )
+            await opat_page.wait_for_timeout(300)
+            print(f"  Fecha inicio: {datos['fecha_inicio']}")
+
+        # ── HORA INICIO ───────────────────────────────────────────────────────
+        if datos.get("hora_inicio"):
+            hora_inicio_input = opat_page.locator('input[type="time"]').first
+            dt_hora = datetime.strptime(datos["hora_inicio"], "%I:%M %p")
+            await hora_inicio_input.fill(dt_hora.strftime("%H:%M"))
+            await opat_page.wait_for_timeout(300)
+            print(f"  Hora inicio: {datos['hora_inicio']}")
+
+        # ── FECHA FIN ─────────────────────────────────────────────────────────
+        if datos.get("fecha_fin"):
+            fecha_fin_input = opat_page.locator('input[type="date"]').nth(1)
+            await fecha_fin_input.fill(
+                datetime.strptime(datos["fecha_fin"], "%m/%d/%Y").strftime("%Y-%m-%d")
+            )
+            await opat_page.wait_for_timeout(300)
+            print(f"  Fecha fin: {datos['fecha_fin']}")
+
+        # ── HORA FIN ──────────────────────────────────────────────────────────
+        if datos.get("hora_fin"):
+            hora_fin_input = opat_page.locator('input[type="time"]').nth(1)
+            dt_hora_fin = datetime.strptime(datos["hora_fin"], "%I:%M %p")
+            await hora_fin_input.fill(dt_hora_fin.strftime("%H:%M"))
+            await opat_page.wait_for_timeout(300)
+            print(f"  Hora fin: {datos['hora_fin']}")
+
+        # ── TIPO TRABAJO ──────────────────────────────────────────────────────
+        tipo_trabajo = datos.get("tipo_trabajo", "DESCONEXIÓN")
+        tipo_select  = opat_page.locator('select', has_text="DESCONEXIÓN").first
+        await tipo_select.select_option(label=tipo_trabajo)
+        await opat_page.wait_for_timeout(500)
+        print(f"  Tipo trabajo: {tipo_trabajo}")
+
+        # ── SE O LÍNEA ────────────────────────────────────────────────────────
+        if datos.get("se_linea"):
+            se_input = await opat_page.query_selector(
+                'input[placeholder*="SE"], input[placeholder*="Línea"], input[placeholder*="Linea"]'
+            )
+            if se_input:
+                await se_input.fill(datos["se_linea"])
+                await opat_page.wait_for_timeout(300)
+            print(f"  SE o Línea: {datos['se_linea']}")
+
+        # ── ÁREA ZONAL ────────────────────────────────────────────────────────
+        area_input = await opat_page.query_selector(
+            'input[placeholder*="Metropolitana"], input[placeholder*="Area"], input[placeholder*="Área"]'
+        )
+        if area_input:
+            await area_input.fill("Área Mtto Zonal Metropolitana")
+            await opat_page.wait_for_timeout(300)
+        print("  Área Zonal: Área Mtto Zonal Metropolitana")
+
+        # ── COMPONENTES ───────────────────────────────────────────────────────
+        if datos.get("componentes"):
+            comp_input = await opat_page.query_selector(
+                'input[placeholder*="52J"], input[placeholder*="Componente"]'
+            )
+            if comp_input:
+                await comp_input.fill(datos["componentes"])
+                await opat_page.wait_for_timeout(300)
+            print(f"  Componentes: {datos['componentes'][:50]}")
+
+        # ── DESCRIPCIÓN / OBJETIVO GENERAL ───────────────────────────────────
+        if datos.get("descripcion"):
+            desc_textarea = opat_page.locator('textarea').first
+            await desc_textarea.fill(datos["descripcion"])
+            await opat_page.wait_for_timeout(300)
+            print(f"  Descripción: {datos['descripcion'][:60]}...")
+
+        await screenshot(opat_page, f"opat_pre_guardar_{pt_id}")
+
+        # ── GUARDAR Y CERRAR ──────────────────────────────────────────────────
+        await opat_page.click(
+            'button:has-text("Guardar y Cerrar"), button:has-text("Guardar")'
+        )
+        await opat_page.wait_for_timeout(3000)
+        await screenshot(opat_page, f"opat_post_guardar_{pt_id}")
+
+        # Verificar que se guardó (el modal se cerró)
+        modal_abierto = await opat_page.query_selector(
+            'text="Detalle de Maniobra"'
+        )
+        if modal_abierto:
+            print(f"    ADVERTENCIA: modal sigue abierto para {pt_id}")
+            return False
+
+        print(f"  ✓ PT {pt_id} subido a OPAT exitosamente")
+        return True
+
+    except Exception as e:
+        print(f"  ERROR subiendo {pt_id} a OPAT: {e}")
+        await screenshot(opat_page, f"opat_error_{pt_id}")
+        return False
+
+
+# =============================================================================
+# APROBAR PTS EN CENTRALITY Y SUBIR A OPAT
+# =============================================================================
+
+async def aprobar_pts(page, frame, opat_page):
+    print("\n[4] APROBANDO PTs y subiendo a OPAT")
     print(f"  DRY_RUN: {DRY_RUN}")
-    print(f"  MAX_APROBACIONES: {MAX_APROBACIONES}")
 
     pts_aprobados = []
-    pts_fallidos = []
-    pts_omitidos = []
+    pts_fallidos  = []
+    pts_omitidos  = []
 
     total_paginas = await frame.evaluate(JS_GET_TOTAL_PAGES)
     paginas = min(total_paginas, 20)
-
     print(f"  Total páginas: {total_paginas}")
 
     for pagina in range(1, paginas + 1):
         print(f"\n  ── Página {pagina}/{paginas} ──")
-
         await page.wait_for_timeout(1500)
 
         filas = await frame.evaluate(JS_READ_ROWS)
         print(f"  Filas leídas: {len(filas)}")
 
         pts_esta_pagina = []
-
         for row in filas:
             if not row:
                 continue
-
             id_pt, area_pt, estado_pt = extraer_info_fila(row)
-
             if not id_pt:
                 continue
-
             if not es_estado_pcct_exacto(estado_pt):
                 pts_omitidos.append({
                     "id": id_pt,
-                    "area": area_pt or "Sin área detectada",
-                    "motivo": f"Estado no corresponde: {estado_pt or 'Sin estado'}"
+                    "area": area_pt or "Sin área",
+                    "motivo": f"Estado: {estado_pt or 'sin estado'}"
                 })
-                print(f"    [OMITIR ESTADO] {id_pt} | {estado_pt}")
+                print(f"    [OMITIR ESTADO] {id_pt}")
                 continue
-
             if es_metropolitana(area_pt):
-                pts_esta_pagina.append({
-                    "id": id_pt,
-                    "area": area_pt,
-                    "estado": estado_pt
-                })
+                pts_esta_pagina.append({"id": id_pt, "area": area_pt, "estado": estado_pt})
                 print(f"    [APROBAR] {id_pt} | {area_pt}")
             else:
                 pts_omitidos.append({
                     "id": id_pt,
-                    "area": area_pt or "Sin área detectada",
+                    "area": area_pt or "Sin área",
                     "motivo": "Área no Metropolitana"
                 })
                 print(f"    [OMITIR AREA] {id_pt} | {area_pt}")
 
         for pt in pts_esta_pagina:
-
             if len(pts_aprobados) >= MAX_APROBACIONES:
                 print("    LÍMITE DE SEGURIDAD ALCANZADO")
                 return pts_aprobados, pts_fallidos, pts_omitidos
@@ -663,129 +744,115 @@ async def aprobar_pts(page, frame):
 
             try:
                 if DRY_RUN:
-                    print(f"    [DRY RUN] {pt['id']} NO fue aprobado realmente")
+                    print(f"    [DRY RUN] {pt['id']}")
                     pts_aprobados.append({
-                        "id": pt["id"],
-                        "area": pt["area"],
-                        "estado": pt["estado"]
+                        "id": pt["id"], "area": pt["area"],
+                        "estado": pt["estado"], "opat": False, "opat_dry": True
                     })
                     continue
 
-                # SELECCIONAR FILA
+                # ── 1. LEER DETALLE ANTES DE APROBAR ─────────────────────────
+                print("    Leyendo detalle del PT...")
+                datos_opat = await leer_detalle_pt(page, frame, pt["id"])
+
+                # ── 2. SELECCIONAR FILA ───────────────────────────────────────
                 sel = await seleccionar_fila_pt(page, frame, pt["id"])
                 print(f"    selección: {sel}")
-
                 if not sel.get("found"):
                     pts_fallidos.append(f"{pt['id']} - fila no encontrada")
-                    await screenshot(page, f"err_select_{pt['id']}")
                     continue
-
                 if not sel.get("selected"):
-                    pts_fallidos.append(f"{pt['id']} - fila no quedó seleccionada")
-                    await screenshot(page, f"err_not_selected_{pt['id']}")
+                    pts_fallidos.append(f"{pt['id']} - fila no seleccionada")
                     continue
 
-                await screenshot(page, f"fila_select_{pt['id']}")
-
-                # VALIDAR BOTÓN APROBAR
+                # ── 3. VALIDAR BOTÓN APROBAR ──────────────────────────────────
                 btn = await frame.evaluate(JS_CHECK_BTN_APROBAR)
                 print(f"    botón Aprobar: {btn}")
-
                 if not btn.get("found"):
                     pts_fallidos.append(f"{pt['id']} - botón Aprobar no visible")
-                    await screenshot(page, f"err_nobtn_{pt['id']}")
                     continue
-
                 if btn.get("disabled"):
                     pts_fallidos.append(f"{pt['id']} - botón Aprobar deshabilitado")
-                    await screenshot(page, f"err_disabled_{pt['id']}")
                     continue
 
                 await screenshot(page, f"pre_{pt['id']}")
 
-                # CLICK APROBAR
+                # ── 4. CLICK APROBAR ──────────────────────────────────────────
                 click_r = await frame.evaluate(JS_CLICK_BTN_APROBAR)
                 print(f"    click Aprobar: {click_r}")
-
                 if not click_r.get("clicked"):
-                    print("    Retry Aprobar con locator...")
-                    aprobar_btn = frame.locator("button.x-btn-text", has_text="Aprobar").first
-                    await aprobar_btn.click(timeout=5000, force=True)
-                    print("    click Aprobar retry OK")
+                    btn_loc = frame.locator("button.x-btn-text", has_text="Aprobar").first
+                    await btn_loc.click(timeout=5000, force=True)
 
                 await page.wait_for_timeout(2000)
 
-                # DETECTAR POPUP
+                # ── 5. DETECTAR POPUP ─────────────────────────────────────────
                 popup = {"found": False}
-
                 for intento in range(14):
                     await page.wait_for_timeout(700)
                     popup = await frame.evaluate(JS_DETECT_POPUP)
                     if popup.get("found"):
-                        print(f"    popup OK intento {intento + 1}: {popup}")
+                        print(f"    popup OK intento {intento+1}")
                         break
 
                 await screenshot(page, f"popup_{pt['id']}")
-
                 if not popup.get("found"):
-                    pts_fallidos.append(f"{pt['id']} - popup Aprobar no apareció")
-                    print("    ERROR: popup no apareció")
+                    pts_fallidos.append(f"{pt['id']} - popup no apareció")
                     continue
 
-                # CLICK ACEPTAR
+                # ── 6. CLICK ACEPTAR ──────────────────────────────────────────
                 aceptar = await frame.evaluate(JS_CLICK_ACEPTAR)
                 print(f"    Aceptar: {aceptar}")
-
                 if not aceptar.get("ok"):
-                    pts_fallidos.append(f"{pt['id']} - click Aceptar falló")
-                    await screenshot(page, f"err_aceptar_{pt['id']}")
+                    pts_fallidos.append(f"{pt['id']} - Aceptar falló")
                     continue
 
-                # ESPERAR PROCESAMIENTO
+                # ── 7. ESPERAR PROCESAMIENTO CENTRALITY ───────────────────────
                 print("    esperando procesamiento Centrality...")
                 await page.wait_for_timeout(5000)
-
                 for _ in range(20):
                     popup_abierto = await frame.evaluate("""
-                    () => {
-                        return Array.from(document.querySelectorAll(".x-window"))
-                            .some(w =>
-                                w.offsetParent &&
-                                ((w.innerText || "").includes("Aprobar") ||
-                                 (w.innerText || "").includes("Confirm"))
-                            );
-                    }
+                    () => Array.from(document.querySelectorAll(".x-window"))
+                        .some(w => w.offsetParent &&
+                            ((w.innerText||"").includes("Aprobar") ||
+                             (w.innerText||"").includes("Confirm")))
                     """)
                     if not popup_abierto:
                         break
                     await page.wait_for_timeout(1000)
 
-                refresh = await frame.evaluate(JS_REFRESH_GRID)
-                print(f"    refresh grilla: {refresh}")
+                await frame.evaluate(JS_REFRESH_GRID)
                 await page.wait_for_timeout(5000)
 
-                # ESPERAR DESAPARICIÓN
+                # ── 8. VERIFICAR DESAPARICIÓN ─────────────────────────────────
                 desaparecio = False
                 for intento in range(20):
-                    aun_existe = await frame.evaluate(JS_PT_EXISTE, pt["id"])
-                    if not aun_existe:
+                    if not await frame.evaluate(JS_PT_EXISTE, pt["id"]):
                         desaparecio = True
                         break
-                    print(f"    esperando desaparición PT... intento {intento+1}")
                     await page.wait_for_timeout(1500)
 
                 await screenshot(page, f"post_{pt['id']}")
 
-                if desaparecio:
-                    pts_aprobados.append({
-                        "id": pt["id"],
-                        "area": pt["area"],
-                        "estado": pt["estado"]
-                    })
-                    print(f"    APROBADO: {pt['id']}")
+                if not desaparecio:
+                    pts_fallidos.append(f"{pt['id']} - sigue visible")
+                    continue
+
+                print(f"    ✓ APROBADO en Centrality: {pt['id']}")
+
+                # ── 9. SUBIR A OPAT ───────────────────────────────────────────
+                opat_ok = False
+                if datos_opat and opat_page:
+                    opat_ok = await subir_pt_a_opat(opat_page, datos_opat)
                 else:
-                    pts_fallidos.append(f"{pt['id']} - sigue visible después de aprobar")
-                    print(f"    ERROR: {pt['id']} sigue visible")
+                    print(f"    ADVERTENCIA: sin datos para OPAT ({pt['id']})")
+
+                pts_aprobados.append({
+                    "id":    pt["id"],
+                    "area":  pt["area"],
+                    "estado": pt["estado"],
+                    "opat":  opat_ok
+                })
 
             except Exception as e:
                 msg = str(e)[:250]
@@ -794,13 +861,11 @@ async def aprobar_pts(page, frame):
                 await screenshot(page, f"exc_{pt['id']}")
 
         if len(pts_aprobados) >= MAX_APROBACIONES:
-            print("  LÍMITE DE SEGURIDAD ALCANZADO")
             break
 
         if pagina < paginas:
             sig = await frame.evaluate(JS_NEXT_PAGE)
             if not sig:
-                print("  No hay más páginas")
                 break
             await page.wait_for_timeout(4000)
 
@@ -813,7 +878,6 @@ async def aprobar_pts(page, frame):
 # =============================================================================
 
 def enviar_reporte(pts_aprobados, pts_fallidos, pts_omitidos, error_critico=None):
-    # Hora real en Chile
     ahora_chile = datetime.now(TZ_CHILE)
     fecha       = ahora_chile.strftime("%d/%m/%Y")
     hora        = ahora_chile.strftime("%H:%M")
@@ -821,14 +885,22 @@ def enviar_reporte(pts_aprobados, pts_fallidos, pts_omitidos, error_critico=None
 
     def filas_aprobados():
         if not pts_aprobados:
-            return "<tr><td colspan='3' style='padding:6px 12px;color:#999'>Ninguno</td></tr>"
+            return "<tr><td colspan='4' style='padding:6px 12px;color:#999'>Ninguno</td></tr>"
         html = ""
         for pt in pts_aprobados:
+            opat_dry = pt.get("opat_dry", False)
+            if opat_dry:
+                opat_icon = "<span style='color:#888'>— (simulado)</span>"
+            elif pt.get("opat"):
+                opat_icon = "<span style='color:#006600;font-size:16px'>&#10003;</span>"
+            else:
+                opat_icon = "<span style='color:#cc0000;font-size:16px'>&#10007;</span>"
             html += (
                 "<tr>"
                 "<td style='padding:4px 8px;color:#006600;font-size:16px'>&#10003;</td>"
                 f"<td style='font-family:monospace;padding:4px 12px'>{pt.get('id','')}</td>"
                 f"<td style='padding:4px 12px'>{pt.get('area','')}</td>"
+                f"<td style='padding:4px 12px;text-align:center'>{opat_icon}</td>"
                 "</tr>"
             )
         return html
@@ -864,27 +936,38 @@ def enviar_reporte(pts_aprobados, pts_fallidos, pts_omitidos, error_critico=None
         error_bloque = (
             "<div style='background:#fff0f0;border-left:4px solid #c00;"
             "padding:12px 16px;margin:16px 0;border-radius:4px'>"
-            "<strong>Error crítico:</strong><br>"
-            f"<code style='font-size:12px'>{error_critico}</code>"
+            f"<strong>Error crítico:</strong><br><code style='font-size:12px'>{error_critico}</code>"
             "</div>"
         )
+
+    # Contar subidos a OPAT
+    opat_ok_count = sum(1 for pt in pts_aprobados if pt.get("opat"))
 
     html = (
         "<html><body style='font-family:Arial,sans-serif;max-width:760px;margin:auto;color:#222'>"
         "<div style='background:#003580;color:white;padding:24px;border-radius:8px 8px 0 0'>"
-        "<h2 style='margin:0;font-size:20px'>Reporte PT's — Centrality / DMS</h2>"
+        "<h2 style='margin:0;font-size:20px'>Reporte PT's &mdash; Centrality / DMS</h2>"
         "<p style='margin:6px 0 0;opacity:.8;font-size:14px'>"
-        "Aprobación PCCT · Zonal Metropolitana</p>"
+        "Aprobación PCCT &middot; Zonal Metropolitana</p>"
         "</div>"
         "<div style='border:1px solid #ddd;border-top:none;padding:20px 24px;border-radius:0 0 8px 8px'>"
         f"<p><strong>Fecha:</strong> {fecha} {hora}</p>"
         "<p><strong>Criterio:</strong> Estado = Revisión y Autorización PCCT"
         " | Área contiene Metropolitana</p>"
         + error_bloque
-        + f"<h3 style='color:#006600;margin:20px 0 8px'>PTs Aprobados ({len(pts_aprobados)})</h3>"
+        + f"<h3 style='color:#006600;margin:20px 0 8px'>"
+        f"PTs Aprobados ({len(pts_aprobados)}) &nbsp;"
+        f"<span style='font-size:13px;color:#555'>— Subidos a OPAT: {opat_ok_count}</span></h3>"
         "<table style='border-collapse:collapse;width:100%'>"
-        "<tr style='background:#f6f6f6'><th></th><th>PT</th><th>Área</th></tr>"
+        "<tr style='background:#f6f6f6'>"
+        "<th style='padding:6px 8px'>✓</th>"
+        "<th style='padding:6px 12px;text-align:left'>PT</th>"
+        "<th style='padding:6px 12px;text-align:left'>Área</th>"
+        "<th style='padding:6px 12px;text-align:center'>OPAT</th>"
+        "</tr>"
         f"{filas_aprobados()}</table>"
+        f"<p style='font-size:12px;color:#888;margin-top:6px'>"
+        f"&#10003; = subido a OPAT &nbsp;&nbsp; &#10007; = error al subir</p>"
         f"<h3 style='color:#cc0000;margin:20px 0 8px'>PTs con Error ({len(pts_fallidos)})</h3>"
         f"<table style='border-collapse:collapse;width:100%'>{filas_fallidos()}</table>"
         f"<h3 style='color:#888;margin:20px 0 8px'>PTs Omitidos ({len(pts_omitidos)})</h3>"
@@ -894,20 +977,19 @@ def enviar_reporte(pts_aprobados, pts_fallidos, pts_omitidos, error_critico=None
         "</div></body></html>"
     )
 
-    # Asunto con hora Chile
     if error_critico:
         asunto = f"[Reporte PTS Centrality] ERROR {fecha} {hora_ampm}"
     else:
         asunto = (
             f"[Reporte PTS Centrality] {fecha} {hora_ampm}"
             f" | {len(pts_aprobados)} aprobados"
+            f" | {opat_ok_count} en OPAT"
             f" | {len(pts_fallidos)} errores"
             f" | {len(pts_omitidos)} omitidos"
         )
 
-    # Destinatarios: principal + CC
     todos = [EMAIL_DEST] + EMAIL_CC
-    msg = MIMEMultipart("alternative")
+    msg   = MIMEMultipart("alternative")
     msg["Subject"] = asunto
     msg["From"]    = GMAIL_USER
     msg["To"]      = EMAIL_DEST
@@ -929,15 +1011,14 @@ def enviar_reporte(pts_aprobados, pts_fallidos, pts_omitidos, error_critico=None
 
 async def main():
     sep = "=" * 65
-
     print(f"\n{sep}")
     print(f"  SAESA AUTOMATION | {datetime.now(TZ_CHILE).strftime('%d/%m/%Y %H:%M')}")
     print(f"  DRY_RUN: {DRY_RUN}")
     print(f"{sep}")
 
     pts_aprobados = []
-    pts_fallidos = []
-    pts_omitidos = []
+    pts_fallidos  = []
+    pts_omitidos  = []
     error_critico = None
 
     async with async_playwright() as p:
@@ -951,24 +1032,37 @@ async def main():
             ],
         )
 
-        ctx = await browser.new_context(
+        # Dos contextos independientes: uno para Centrality, otro para OPAT
+        ctx_centrality = await browser.new_context(
+            ignore_https_errors=True,
+            viewport={"width": 1400, "height": 900},
+        )
+        ctx_opat = await browser.new_context(
             ignore_https_errors=True,
             viewport={"width": 1400, "height": 900},
         )
 
-        page = await ctx.new_page()
+        page_centrality = await ctx_centrality.new_page()
+        page_opat       = await ctx_opat.new_page()
 
         try:
-            await hacer_login(page)
-            frame = await navegar_a_permisos(page)
-            await aplicar_filtro_pcct(page, frame)
-            pts_aprobados, pts_fallidos, pts_omitidos = await aprobar_pts(page, frame)
+            # Login en ambos sistemas en paralelo
+            await asyncio.gather(
+                hacer_login_centrality(page_centrality),
+                hacer_login_opat(page_opat),
+            )
+
+            frame = await navegar_a_permisos(page_centrality)
+            await aplicar_filtro_pcct(page_centrality, frame)
+            pts_aprobados, pts_fallidos, pts_omitidos = await aprobar_pts(
+                page_centrality, frame, page_opat
+            )
 
         except Exception as e:
             error_critico = str(e)
             print(f"\nERROR CRÍTICO: {e}")
             try:
-                await screenshot(page, "error_critico")
+                await screenshot(page_centrality, "error_critico")
             except Exception:
                 pass
 
