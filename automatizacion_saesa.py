@@ -23,10 +23,14 @@ SAESA_PASS = os.environ["SAESA_PASS"]
 OPAT_USER  = os.environ["OPAT_USER"]
 OPAT_PASS  = os.environ["OPAT_PASS"]
 
+NEOMANTE_URL  = "https://neomante.coordinador.cl/login?next=%2F"
+NEOMANTE_USER = os.environ["NEOMANTE_USER"]
+NEOMANTE_PASS = os.environ["NEOMANTE_PASS"]
+
 GMAIL_USER = os.environ["GMAIL_USER"]
 GMAIL_PASS = os.environ["GMAIL_APP_PASS"]
 EMAIL_DEST = os.environ["EMAIL_DEST"]
-EMAIL_CC   = ["nicolas.lorenzen@saesa.cl", "jorge.canete@saesa.cl", "alexis.aedo@saesa.cl"]
+EMAIL_CC   = ["alexis.aedo@saesa.cl", "jorge.canete@saesa.cl"]
 
 DRY_RUN          = os.environ.get("DRY_RUN", "true").lower() == "true"
 MAX_APROBACIONES = int(os.environ.get("MAX_APROBACIONES", "50"))
@@ -1021,7 +1025,7 @@ async def subir_pt_a_opat(opat_page, datos):
 # APROBAR PTS EN CENTRALITY Y SUBIR A OPAT
 # =============================================================================
 
-async def aprobar_pts(page, frame, opat_page):
+async def aprobar_pts(page, frame, opat_page, neo_page):
     print("\n[4] APROBANDO PTs y subiendo a OPAT")
     print(f"  DRY_RUN: {DRY_RUN}")
 
@@ -1078,7 +1082,8 @@ async def aprobar_pts(page, frame, opat_page):
                     print(f"    [DRY RUN] {pt['id']}")
                     pts_aprobados.append({
                         "id": pt["id"], "area": pt["area"],
-                        "estado": pt["estado"], "opat": False, "opat_dry": True
+                        "estado": pt["estado"], "opat": False, "opat_dry": True,
+                        "cen": None
                     })
                     continue
 
@@ -1178,11 +1183,46 @@ async def aprobar_pts(page, frame, opat_page):
                 else:
                     print(f"    ADVERTENCIA: sin datos para OPAT ({pt['id']})")
 
+                # Crear aviso CEN en Neomante
+                numero_cen = None
+                if opat_ok and neo_page:
+                    numero_cen = await crear_aviso_cen(neo_page, datos_opat)
+                    # Actualizar campo modAvisoCen en OPAT con el número obtenido
+                    if numero_cen and opat_page:
+                        try:
+                            await opat_page.evaluate(f"""
+                            (num) => {{
+                                var el = document.getElementById('modAvisoCen');
+                                if (!el) {{
+                                    // Buscar por el aviso CEN en el modal abierto más reciente
+                                    var inputs = Array.from(document.querySelectorAll('input'));
+                                    for (var i=0; i<inputs.length; i++) {{
+                                        if ((inputs[i].placeholder||'').toLowerCase().includes('cen') ||
+                                            (inputs[i].id||'').toLowerCase().includes('cen') ||
+                                            (inputs[i].name||'').toLowerCase().includes('cen')) {{
+                                            el = inputs[i]; break;
+                                        }}
+                                    }}
+                                }}
+                                if (el) {{
+                                    el.value = num;
+                                    el.dispatchEvent(new Event('input', {{bubbles:true}}));
+                                    el.dispatchEvent(new Event('change', {{bubbles:true}}));
+                                    return 'ok';
+                                }}
+                                return 'not_found';
+                            }}
+                            """, numero_cen)
+                            print(f"    Aviso CEN {numero_cen} guardado en OPAT")
+                        except Exception as e_cen:
+                            print(f"    ADVERTENCIA: no se pudo guardar CEN en OPAT: {e_cen}")
+
                 pts_aprobados.append({
-                    "id":    pt["id"],
-                    "area":  pt["area"],
-                    "estado": pt["estado"],
-                    "opat":  opat_ok
+                    "id":        pt["id"],
+                    "area":      pt["area"],
+                    "estado":    pt["estado"],
+                    "opat":      opat_ok,
+                    "cen":       numero_cen,
                 })
 
             except Exception as e:
@@ -1204,6 +1244,500 @@ async def aprobar_pts(page, frame, opat_page):
     return pts_aprobados, pts_fallidos, pts_omitidos
 
 
+
+# =============================================================================
+# NEOMANTE — HELPERS
+# =============================================================================
+
+NEOMANTE_TRABAJO_SOBRE_MAP = {
+    # Paños
+    "int ": "Paños", "alim": "Paños", "alimentador": "Paños",
+    "paño": "Paños", "pano": "Paños", "bco": "Paños",
+    # Transformador
+    "trafo": "Transformador", "transformador": "Transformador",
+    "t2d": "Transformador", " at": "Transformador", " ht": "Transformador",
+    "autotransf": "Transformador",
+    # Secciones de barra
+    "barra": "Secciones de barra", "secc": "Secciones de barra",
+    "sección": "Secciones de barra", "seccion": "Secciones de barra",
+    # Scada
+    "scada": "Scada", "utr": "Scada", "control y": "Scada",
+    # Compensadores
+    "compensador": "Compensadores", "reactor": "Compensadores",
+    # Medidores
+    "medidor": "Medidores de facturación",
+}
+
+
+def determinar_trabajo_sobre(instalacion_a_intervenir: str, detalle_instalacion: str) -> str:
+    """Determina la opción 'Trabajo Sobre' de Neomante según datos del PT."""
+    textos = [
+        (instalacion_a_intervenir or "").lower(),
+        (detalle_instalacion or "").lower(),
+    ]
+    for texto in textos:
+        for keyword, trabajo in NEOMANTE_TRABAJO_SOBRE_MAP.items():
+            if keyword in texto:
+                return trabajo
+    return "Otros equipos"
+
+
+def extraer_codigo_componente(detalle_instalacion: str) -> str:
+    """
+    Extrae el código del componente de la última parte del texto.
+    Ej: 'INT 12kV BCO 1A' → '1A'
+         'T2D AT1' → 'AT1'
+         'BARRA 220kV' → '220kV'
+    """
+    if not detalle_instalacion:
+        return ""
+    partes = detalle_instalacion.strip().split()
+    if partes:
+        return partes[-1]  # última palabra
+    return detalle_instalacion.strip()
+
+
+# =============================================================================
+# NEOMANTE — LOGIN Y SWITCH EMPRESA
+# =============================================================================
+
+async def hacer_login_neomante(neo_page):
+    print("\n[NEOMANTE] LOGIN")
+
+    for intento in range(3):
+        try:
+            await neo_page.goto(NEOMANTE_URL, wait_until="domcontentloaded", timeout=120_000)
+            break
+        except Exception as e:
+            print(f"  goto intento {intento+1} falló: {e}")
+            if intento == 2:
+                raise
+            await neo_page.wait_for_timeout(5000)
+
+    await neo_page.wait_for_timeout(2000)
+    await screenshot(neo_page, "neomante_login")
+
+    # Seleccionar pestaña "Coordinado"
+    try:
+        await neo_page.click('text="Coordinado"', timeout=10_000)
+        await neo_page.wait_for_timeout(1000)
+        print("  pestaña Coordinado seleccionada")
+    except Exception:
+        print("  ADVERTENCIA: no se encontró pestaña Coordinado")
+
+    # Email
+    email_input = await neo_page.query_selector('input[placeholder*="Email"], input[type="email"], input[placeholder*="mail"]')
+    if email_input:
+        await email_input.fill(NEOMANTE_USER)
+
+    # Contraseña
+    pass_input = await neo_page.query_selector('input[type="password"], input[placeholder*="Contraseña"]')
+    if pass_input:
+        await pass_input.fill(NEOMANTE_PASS)
+
+    # Botón Ingresar
+    await neo_page.click('button:has-text("Ingresar"), input[value="Ingresar"]')
+    await neo_page.wait_for_load_state("networkidle", timeout=30_000)
+    await neo_page.wait_for_timeout(2000)
+    await screenshot(neo_page, "neomante_post_login")
+    print("  OK: sesión Neomante iniciada")
+
+    # Switch a SOCIEDAD TRANSMISORA METROPOLITANA S.A.
+    print("  Haciendo switch a SOCIEDAD TRANSMISORA METROPOLITANA S.A...")
+    try:
+        # Click en el nombre de empresa en el header (arriba a la derecha)
+        await neo_page.click('text="SISTEMA DE TRANSMISIÓN DEL SUR S.A."', timeout=10_000)
+        await neo_page.wait_for_timeout(1500)
+        await screenshot(neo_page, "neomante_switch_menu")
+
+        # Buscar y clickear la opción de switch
+        await neo_page.click('text="SOCIEDAD TRANSMISORA METROPOLITANA S.A"', timeout=10_000)
+        await neo_page.wait_for_load_state("networkidle", timeout=20_000)
+        await neo_page.wait_for_timeout(2000)
+        await screenshot(neo_page, "neomante_post_switch")
+        print("  OK: switch a SOCIEDAD TRANSMISORA METROPOLITANA S.A.")
+    except Exception as e:
+        print(f"  ADVERTENCIA switch: {e}")
+
+
+# =============================================================================
+# NEOMANTE — CREAR AVISO CEN
+# =============================================================================
+
+async def crear_aviso_cen(neo_page, datos):
+    """
+    Crea el aviso al CEN en Neomante con los datos del PT.
+    Devuelve el número de aviso (ej: '2026061675') o None si falló.
+    """
+    pt_id = datos["id"]
+    print(f"\n[NEOMANTE] Creando aviso CEN para PT {pt_id}...")
+
+    try:
+        # Ir al home de Neomante
+        await neo_page.goto("https://neomante.coordinador.cl/", wait_until="domcontentloaded", timeout=60_000)
+        await neo_page.wait_for_timeout(2000)
+
+        # Click en Desconexión/Intervención → Subestación
+        await neo_page.click('text="Subestación"', timeout=TIMEOUT)
+        await neo_page.wait_for_load_state("networkidle", timeout=20_000)
+        await neo_page.wait_for_timeout(1500)
+        await screenshot(neo_page, f"neo_01_tipo_{pt_id}")
+
+        # ── PASO 1: Tipo de Solicitud ──────────────────────────────────────────
+        tipo_solicitud = datos.get("tipo_trabajo", "DESCONEXIÓN")
+        if "INTERV" in tipo_solicitud.upper():
+            await neo_page.click('text="Intervención"', timeout=10_000)
+        else:
+            await neo_page.click('text="Desconexión"', timeout=10_000)
+        await neo_page.wait_for_timeout(500)
+        print(f"  Tipo solicitud: {tipo_solicitud}")
+
+        # Origen Interno
+        await neo_page.click('text="Origen Interno"', timeout=10_000)
+        await neo_page.wait_for_timeout(500)
+
+        # Programada
+        await neo_page.click('text="Programada"', timeout=10_000)
+        await neo_page.wait_for_timeout(500)
+
+        # Siguiente
+        await neo_page.click('button:has-text("Siguiente")', timeout=10_000)
+        await neo_page.wait_for_load_state("networkidle", timeout=20_000)
+        await neo_page.wait_for_timeout(1500)
+        await screenshot(neo_page, f"neo_02_subestacion_{pt_id}")
+
+        # ── PASO 2: Subestación ───────────────────────────────────────────────
+        # Buscar la subestación por el nombre del Elemento referencia
+        ssee_raw = datos.get("se_linea", "")
+        # Limpiar el nombre: quitar "(Subestación)" etc.
+        ssee_nombre = re.sub(r'\s*\(.*?\)', '', ssee_raw).strip().upper()
+        print(f"  Buscando subestación: {ssee_nombre}")
+
+        # Seleccionar "Mis subestaciones" primero, luego "Todas las subestaciones" si no aparece
+        seleccionada = False
+        for opcion in ["Mis subestaciones", "Todas las subestaciones"]:
+            try:
+                await neo_page.click(f'text="{opcion}"', timeout=5000)
+                await neo_page.wait_for_timeout(1000)
+
+                # Buscar en el select
+                resultado = await neo_page.evaluate(f"""
+                (nombre) => {{
+                    var selects = Array.from(document.querySelectorAll('select'));
+                    for (var i=0; i<selects.length; i++) {{
+                        var opts = Array.from(selects[i].options);
+                        // Buscar coincidencia exacta primero
+                        for (var j=0; j<opts.length; j++) {{
+                            if (opts[j].text.toUpperCase().includes(nombre)) {{
+                                selects[i].selectedIndex = j;
+                                selects[i].dispatchEvent(new Event('change', {{bubbles:true}}));
+                                return 'ok:' + opts[j].text;
+                            }}
+                        }}
+                    }}
+                    return 'not_found';
+                }}
+                """, ssee_nombre)
+                print(f"  Subestación ({opcion}): {resultado}")
+
+                if "ok:" in resultado:
+                    seleccionada = True
+                    break
+            except Exception:
+                continue
+
+        if not seleccionada:
+            print(f"  ADVERTENCIA: subestación no encontrada, seleccionando primera disponible")
+            await neo_page.evaluate("""
+            () => {
+                var s = document.querySelector('select');
+                if (s && s.options.length > 1) {
+                    s.selectedIndex = 1;
+                    s.dispatchEvent(new Event('change', {bubbles:true}));
+                }
+            }
+            """)
+
+        await neo_page.click('button:has-text("Siguiente")', timeout=10_000)
+        await neo_page.wait_for_load_state("networkidle", timeout=20_000)
+        await neo_page.wait_for_timeout(1500)
+        await screenshot(neo_page, f"neo_03_trabajo_sobre_{pt_id}")
+
+        # ── PASO 3: Trabajo Sobre ─────────────────────────────────────────────
+        instalacion = datos.get("raw", {}).get("Instalación a intervenir", "")
+        detalle     = datos.get("componentes", "")
+        trabajo_sobre = determinar_trabajo_sobre(instalacion, detalle)
+        print(f"  Trabajo sobre: {trabajo_sobre} (instalacion='{instalacion}', detalle='{detalle}')")
+
+        await neo_page.click(f'text="{trabajo_sobre}"', timeout=10_000)
+        await neo_page.wait_for_timeout(500)
+
+        await neo_page.click('button:has-text("Siguiente")', timeout=10_000)
+        await neo_page.wait_for_load_state("networkidle", timeout=20_000)
+        await neo_page.wait_for_timeout(1500)
+        await screenshot(neo_page, f"neo_04_elementos_{pt_id}")
+
+        # ── PASO 4: Seleccionar Elementos ─────────────────────────────────────
+        codigo = extraer_codigo_componente(detalle)
+        print(f"  Buscando elemento con código: '{codigo}'")
+
+        elemento_marcado = await neo_page.evaluate(f"""
+        (codigo) => {{
+            var checkboxes = Array.from(document.querySelectorAll('input[type="checkbox"]'));
+            var labels = Array.from(document.querySelectorAll('label'));
+            var items = [];
+
+            // Construir lista de (checkbox, texto)
+            for (var i=0; i<labels.length; i++) {{
+                var lbl = labels[i];
+                var txt = (lbl.innerText || '').trim().toUpperCase();
+                if (txt.length < 3) continue;
+                var cb = null;
+                if (lbl.htmlFor) {{
+                    cb = document.getElementById(lbl.htmlFor);
+                }} else {{
+                    cb = lbl.querySelector('input[type="checkbox"]');
+                }}
+                if (!cb) continue;
+                items.push({{cb: cb, txt: txt}});
+            }}
+
+            // También checkboxes directos
+            for (var j=0; j<checkboxes.length; j++) {{
+                var sibling = checkboxes[j].nextSibling;
+                var txt2 = sibling ? (sibling.textContent || '').trim().toUpperCase() : '';
+                if (txt2.length > 2) items.push({{cb: checkboxes[j], txt: txt2}});
+            }}
+
+            if (items.length === 0) return 'no_items';
+
+            var codigoUpper = (codigo || '').toUpperCase();
+
+            // Buscar por coincidencia del código
+            if (codigoUpper.length > 0) {{
+                for (var k=0; k<items.length; k++) {{
+                    if (items[k].txt.includes(codigoUpper)) {{
+                        items[k].cb.checked = true;
+                        items[k].cb.dispatchEvent(new Event('change', {{bubbles:true}}));
+                        return 'ok_match:' + items[k].txt;
+                    }}
+                }}
+            }}
+
+            // Fallback: primer elemento disponible
+            items[0].cb.checked = true;
+            items[0].cb.dispatchEvent(new Event('change', {{bubbles:true}}));
+            return 'ok_first:' + items[0].txt;
+        }}
+        """, codigo)
+        print(f"  Elemento seleccionado: {elemento_marcado}")
+
+        await neo_page.click('button:has-text("Siguiente")', timeout=10_000)
+        await neo_page.wait_for_load_state("networkidle", timeout=20_000)
+        await neo_page.wait_for_timeout(1500)
+        await screenshot(neo_page, f"neo_05_riesgo_{pt_id}")
+
+        # ── PASO 5: Riesgo del Trabajo ────────────────────────────────────────
+        riesgo_ta = await neo_page.query_selector('textarea')
+        if riesgo_ta:
+            await riesgo_ta.fill("Trabajo sin riesgo para el sistema.")
+        await neo_page.click('button:has-text("Siguiente")', timeout=10_000)
+        await neo_page.wait_for_load_state("networkidle", timeout=20_000)
+        await neo_page.wait_for_timeout(1000)
+
+        # ── PASO 6: Consumo → "No tiene consumo afectado" ─────────────────────
+        await neo_page.click('text="No tiene consumo afectado"', timeout=10_000)
+        await neo_page.wait_for_timeout(500)
+        await neo_page.click('button:has-text("Siguiente")', timeout=10_000)
+        await neo_page.wait_for_load_state("networkidle", timeout=20_000)
+        await neo_page.wait_for_timeout(1000)
+        await screenshot(neo_page, f"neo_06_tipo_trabajo_{pt_id}")
+
+        # ── PASO 7: Tipo Trabajo ──────────────────────────────────────────────
+        # Seleccionar "Otro tipo de trabajo" en el dropdown
+        resultado_tipo = await neo_page.evaluate("""
+        () => {
+            var selects = Array.from(document.querySelectorAll('select'));
+            for (var i=0; i<selects.length; i++) {
+                var opts = Array.from(selects[i].options);
+                for (var j=0; j<opts.length; j++) {
+                    if (opts[j].text.toLowerCase().includes('otro tipo')) {
+                        selects[i].selectedIndex = j;
+                        selects[i].dispatchEvent(new Event('change', {bubbles:true}));
+                        return 'ok:' + opts[j].text;
+                    }
+                }
+            }
+            return 'not_found';
+        }
+        """)
+        print(f"  Tipo trabajo: {resultado_tipo}")
+
+        # Describir el trabajo
+        desc = datos.get("descripcion", "")
+        textareas = await neo_page.query_selector_all('textarea')
+        if len(textareas) >= 1:
+            await textareas[0].fill(desc[:500])  # limitar a 500 chars
+
+        await neo_page.click('button:has-text("Siguiente")', timeout=10_000)
+        await neo_page.wait_for_load_state("networkidle", timeout=20_000)
+        await neo_page.wait_for_timeout(1000)
+
+        # ── PASO 8: Trabajo Afecta → solo Siguiente ───────────────────────────
+        await neo_page.click('button:has-text("Siguiente")', timeout=10_000)
+        await neo_page.wait_for_load_state("networkidle", timeout=20_000)
+        await neo_page.wait_for_timeout(1000)
+
+        # ── PASO 9: Comentario Adicional ──────────────────────────────────────
+        textarea_comentario = await neo_page.query_selector('textarea')
+        if textarea_comentario:
+            await textarea_comentario.fill(
+                "Trabajos enmarcados en el plan de mantenimiento anual de STM"
+            )
+        await neo_page.click('button:has-text("Siguiente")', timeout=10_000)
+        await neo_page.wait_for_load_state("networkidle", timeout=20_000)
+        await neo_page.wait_for_timeout(1500)
+        await screenshot(neo_page, f"neo_07_fecha_{pt_id}")
+
+        # ── PASO 10: Fecha / Hora del Trabajo ─────────────────────────────────
+        # Seleccionar "Ninguno de los antecedentes anteriores"
+        await neo_page.click('text="Ninguno de los antecedentes anteriores"', timeout=10_000)
+        await neo_page.wait_for_timeout(500)
+
+        # Llenar fecha y hora de inicio
+        if datos.get("fecha_inicio") and datos.get("hora_inicio"):
+            dt_inicio = datetime.strptime(
+                datos["fecha_inicio"] + " " + datos["hora_inicio"],
+                "%m/%d/%Y %I:%M %p"
+            )
+            fecha_hora_inicio = dt_inicio.strftime("%d-%m-%Y %H:%M")
+            # El campo es un input de texto con formato dd-mm-yyyy HH:MM
+            await neo_page.evaluate(f"""
+            (val) => {{
+                var inputs = Array.from(document.querySelectorAll('input'));
+                // Buscar inputs de fecha/hora (los que tienen el ícono de reloj)
+                for (var i=0; i<inputs.length; i++) {{
+                    var inp = inputs[i];
+                    if (!inp.offsetParent) continue;
+                    var parent = inp.closest('div,td,tr');
+                    if (!parent) continue;
+                    var parentTxt = (parent.innerText || '').toLowerCase();
+                    if (parentTxt.includes('inicio') || parentTxt.includes('start')) {{
+                        inp.value = val;
+                        inp.dispatchEvent(new Event('input', {{bubbles:true}}));
+                        inp.dispatchEvent(new Event('change', {{bubbles:true}}));
+                        return 'ok:' + inp.id;
+                    }}
+                }}
+                // Fallback: primer input visible
+                for (var j=0; j<inputs.length; j++) {{
+                    if (inputs[j].offsetParent && inputs[j].type !== 'hidden') {{
+                        inputs[j].value = val;
+                        inputs[j].dispatchEvent(new Event('change', {{bubbles:true}}));
+                        return 'fallback:' + inputs[j].id;
+                    }}
+                }}
+                return 'not_found';
+            }}
+            """, fecha_hora_inicio)
+            print(f"  Fecha/hora inicio: {fecha_hora_inicio}")
+
+            # Aplicar con el calendario
+            try:
+                await neo_page.click('button:has-text("Aplicar")', timeout=5000)
+                await neo_page.wait_for_timeout(500)
+            except Exception:
+                pass
+
+        # Llenar fecha y hora de fin
+        if datos.get("fecha_fin") and datos.get("hora_fin"):
+            dt_fin = datetime.strptime(
+                datos["fecha_fin"] + " " + datos["hora_fin"],
+                "%m/%d/%Y %I:%M %p"
+            )
+            fecha_hora_fin = dt_fin.strftime("%d-%m-%Y %H:%M")
+            await neo_page.evaluate(f"""
+            (val) => {{
+                var inputs = Array.from(document.querySelectorAll('input'));
+                for (var i=0; i<inputs.length; i++) {{
+                    var inp = inputs[i];
+                    if (!inp.offsetParent) continue;
+                    var parent = inp.closest('div,td,tr');
+                    if (!parent) continue;
+                    var parentTxt = (parent.innerText || '').toLowerCase();
+                    if (parentTxt.includes('fin') || parentTxt.includes('término') || parentTxt.includes('termino')) {{
+                        inp.value = val;
+                        inp.dispatchEvent(new Event('input', {{bubbles:true}}));
+                        inp.dispatchEvent(new Event('change', {{bubbles:true}}));
+                        return 'ok:' + inp.id;
+                    }}
+                }}
+                // Fallback: segundo input visible
+                var visibles = Array.from(document.querySelectorAll('input')).filter(function(i) {{
+                    return i.offsetParent && i.type !== 'hidden';
+                }});
+                if (visibles.length >= 2) {{
+                    visibles[1].value = val;
+                    visibles[1].dispatchEvent(new Event('change', {{bubbles:true}}));
+                    return 'fallback2:' + visibles[1].id;
+                }}
+                return 'not_found';
+            }}
+            """, fecha_hora_fin)
+            print(f"  Fecha/hora fin: {fecha_hora_fin}")
+
+            try:
+                await neo_page.click('button:has-text("Aplicar")', timeout=5000)
+                await neo_page.wait_for_timeout(500)
+            except Exception:
+                pass
+
+        await screenshot(neo_page, f"neo_08_pre_enviar_{pt_id}")
+
+        # ── PASO 11: Crear y Enviar al Coordinador ────────────────────────────
+        await neo_page.click('button:has-text("Crear y Enviar al Coordinador")', timeout=10_000)
+        await neo_page.wait_for_timeout(1500)
+
+        # Confirmar popup "¿Está seguro de enviar la Solicitud?"
+        await neo_page.click('button:has-text("Aceptar")', timeout=10_000)
+        await neo_page.wait_for_load_state("networkidle", timeout=30_000)
+        await neo_page.wait_for_timeout(2000)
+        await screenshot(neo_page, f"neo_09_resultado_{pt_id}")
+
+        # ── PASO 12: Capturar número de aviso ────────────────────────────────
+        numero_aviso = await neo_page.evaluate("""
+        () => {
+            // Buscar el mensaje de éxito: "Solicitud creada con exito, Número: XXXXXXXXXX"
+            var els = Array.from(document.querySelectorAll('*'));
+            for (var i=0; i<els.length; i++) {
+                var txt = (els[i].innerText || '').trim();
+                if (txt.includes('Solicitud creada') && txt.includes('Número:')) {
+                    var match = txt.match(/Número:\s*(\d+)/);
+                    if (match) return match[1];
+                }
+                // También buscar solo el número en el banner de éxito
+                if (txt.includes('creada con exito')) {
+                    var match2 = txt.match(/(\d{10,})/);
+                    if (match2) return match2[1];
+                }
+            }
+            return null;
+        }
+        """)
+
+        if numero_aviso:
+            print(f"  ✓ Aviso CEN creado: {numero_aviso}")
+            return numero_aviso
+        else:
+            print(f"  ADVERTENCIA: no se pudo capturar el número de aviso")
+            return None
+
+    except Exception as e:
+        print(f"  ERROR creando aviso CEN: {e}")
+        await screenshot(neo_page, f"neo_error_{pt_id}")
+        return None
+
+
 # =============================================================================
 # CORREO
 # =============================================================================
@@ -1216,7 +1750,7 @@ def enviar_reporte(pts_aprobados, pts_fallidos, pts_omitidos, error_critico=None
 
     def filas_aprobados():
         if not pts_aprobados:
-            return "<tr><td colspan='4' style='padding:6px 12px;color:#999'>Ninguno</td></tr>"
+            return "<tr><td colspan='5' style='padding:6px 12px;color:#999'>Ninguno</td></tr>"
         html = ""
         for pt in pts_aprobados:
             opat_dry = pt.get("opat_dry", False)
@@ -1226,12 +1760,22 @@ def enviar_reporte(pts_aprobados, pts_fallidos, pts_omitidos, error_critico=None
                 opat_icon = "<span style='color:#006600;font-size:16px'>&#10003;</span>"
             else:
                 opat_icon = "<span style='color:#cc0000;font-size:16px'>&#10007;</span>"
+
+            cen = pt.get("cen")
+            if opat_dry:
+                cen_cell = "<span style='color:#888'>— (simulado)</span>"
+            elif cen:
+                cen_cell = f"<span style='font-family:monospace;color:#006600;font-weight:bold'>{cen}</span>"
+            else:
+                cen_cell = "<span style='color:#cc0000;font-size:12px'>No se pudo realizar aviso al CEN,<br>realizarlo manualmente</span>"
+
             html += (
                 "<tr>"
                 "<td style='padding:4px 8px;color:#006600;font-size:16px'>&#10003;</td>"
                 f"<td style='font-family:monospace;padding:4px 12px'>{pt.get('id','')}</td>"
                 f"<td style='padding:4px 12px'>{pt.get('area','')}</td>"
                 f"<td style='padding:4px 12px;text-align:center'>{opat_icon}</td>"
+                f"<td style='padding:4px 12px;text-align:center'>{cen_cell}</td>"
                 "</tr>"
             )
         return html
@@ -1273,6 +1817,7 @@ def enviar_reporte(pts_aprobados, pts_fallidos, pts_omitidos, error_critico=None
 
     # Contar subidos a OPAT
     opat_ok_count = sum(1 for pt in pts_aprobados if pt.get("opat"))
+    cen_ok_count  = sum(1 for pt in pts_aprobados if pt.get("cen"))
 
     html = (
         "<html><body style='font-family:Arial,sans-serif;max-width:760px;margin:auto;color:#222'>"
@@ -1288,13 +1833,14 @@ def enviar_reporte(pts_aprobados, pts_fallidos, pts_omitidos, error_critico=None
         + error_bloque
         + f"<h3 style='color:#006600;margin:20px 0 8px'>"
         f"PTs Aprobados ({len(pts_aprobados)}) &nbsp;"
-        f"<span style='font-size:13px;color:#555'>— Subidos a OPAT: {opat_ok_count}</span></h3>"
+        f"<span style='font-size:13px;color:#555'>— OPAT: {opat_ok_count} &nbsp;|&nbsp; Avisos CEN: {cen_ok_count}</span></h3>"
         "<table style='border-collapse:collapse;width:100%'>"
         "<tr style='background:#f6f6f6'>"
         "<th style='padding:6px 8px'>✓</th>"
         "<th style='padding:6px 12px;text-align:left'>PT</th>"
         "<th style='padding:6px 12px;text-align:left'>Área</th>"
         "<th style='padding:6px 12px;text-align:center'>OPAT</th>"
+        "<th style='padding:6px 12px;text-align:center'>Aviso CEN</th>"
         "</tr>"
         f"{filas_aprobados()}</table>"
         f"<p style='font-size:12px;color:#888;margin-top:6px'>"
@@ -1315,6 +1861,7 @@ def enviar_reporte(pts_aprobados, pts_fallidos, pts_omitidos, error_critico=None
             f"[Reporte PTS Centrality] {fecha} {hora_ampm}"
             f" | {len(pts_aprobados)} aprobados"
             f" | {opat_ok_count} en OPAT"
+            f" | {cen_ok_count} avisos CEN"
             f" | {len(pts_fallidos)} errores"
             f" | {len(pts_omitidos)} omitidos"
         )
@@ -1372,21 +1919,27 @@ async def main():
             ignore_https_errors=True,
             viewport={"width": 1400, "height": 900},
         )
+        ctx_neomante = await browser.new_context(
+            ignore_https_errors=True,
+            viewport={"width": 1400, "height": 900},
+        )
 
         page_centrality = await ctx_centrality.new_page()
         page_opat       = await ctx_opat.new_page()
+        page_neomante   = await ctx_neomante.new_page()
 
         try:
-            # Login en ambos sistemas en paralelo
+            # Login en los tres sistemas en paralelo
             await asyncio.gather(
                 hacer_login_centrality(page_centrality),
                 hacer_login_opat(page_opat),
+                hacer_login_neomante(page_neomante),
             )
 
             frame = await navegar_a_permisos(page_centrality)
             await aplicar_filtro_pcct(page_centrality, frame)
             pts_aprobados, pts_fallidos, pts_omitidos = await aprobar_pts(
-                page_centrality, frame, page_opat
+                page_centrality, frame, page_opat, page_neomante
             )
 
         except Exception as e:
