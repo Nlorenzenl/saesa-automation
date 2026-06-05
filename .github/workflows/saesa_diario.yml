@@ -31,6 +31,8 @@ jobs:
       - name: Ejecutar automatización SAESA
         run: python automatizacion_saesa.py
         env:
+          NEOMANTE_USER: ${{ secrets.NEOMANTE_USER }}
+          NEOMANTE_PASS: ${{ secrets.NEOMANTE_PASS }}
           OPAT_USER: ${{ secrets.OPAT_USER }}
           OPAT_PASS: ${{ secrets.OPAT_PASS }}
           SAESA_USER: ${{ secrets.SAESA_USER }}
