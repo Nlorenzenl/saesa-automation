@@ -30,7 +30,7 @@ NEOMANTE_PASS = os.environ["NEOMANTE_PASS"]
 GMAIL_USER = os.environ["GMAIL_USER"]
 GMAIL_PASS = os.environ["GMAIL_APP_PASS"]
 EMAIL_DEST = os.environ["EMAIL_DEST"]
-EMAIL_CC   = ["alexis.aedo@saesa.cl", "jorge.canete@saesa.cl"]
+EMAIL_CC   = ["nicolas.lorenzen@saesa.cl"]
 
 DRY_RUN          = os.environ.get("DRY_RUN", "true").lower() == "true"
 MAX_APROBACIONES = int(os.environ.get("MAX_APROBACIONES", "1"))
@@ -1317,95 +1317,122 @@ async def hacer_login_neomante(neo_page):
     await neo_page.wait_for_timeout(2000)
     await screenshot(neo_page, "neomante_login")
 
-    # Seleccionar pestaña "Coordinado"
-    try:
-        await neo_page.click('text="Coordinado"', timeout=10_000)
-        await neo_page.wait_for_timeout(1500)
-        print("  pestaña Coordinado seleccionada")
-    except Exception:
-        print("  ADVERTENCIA: no se encontró pestaña Coordinado")
-
-    # Esperar que el formulario de Coordinado esté completamente cargado
-    await neo_page.wait_for_timeout(2000)
-
-    # Tomar captura para diagnóstico
-    await screenshot(neo_page, "neomante_pre_fill")
-
-    # Email — llenar via JS para evitar problemas de visibilidad
-    r_email = await neo_page.evaluate(f"""
-    (val) => {{
-        var inputs = Array.from(document.querySelectorAll('input'));
-        for (var i=0; i<inputs.length; i++) {{
-            var ph = (inputs[i].placeholder || '').toLowerCase();
-            var tp = (inputs[i].type || '').toLowerCase();
-            if (ph.includes('email') || tp === 'email' || ph.includes('mail')) {{
-                inputs[i].value = val;
-                inputs[i].dispatchEvent(new Event('input', {{bubbles:true}}));
-                inputs[i].dispatchEvent(new Event('change', {{bubbles:true}}));
-                return 'ok:' + inputs[i].id + ':' + inputs[i].placeholder;
-            }}
-        }}
-        // Fallback: buscar inputs de texto visibles
-        for (var j=0; j<inputs.length; j++) {{
-            if (inputs[j].type === 'text' && inputs[j].offsetParent) {{
-                inputs[j].value = val;
-                inputs[j].dispatchEvent(new Event('input', {{bubbles:true}}));
-                inputs[j].dispatchEvent(new Event('change', {{bubbles:true}}));
-                return 'fallback:' + inputs[j].id;
-            }}
-        }}
-        return 'not_found';
-    }}
-    """, NEOMANTE_USER)
-    print(f"  email fill: {r_email}")
-
-    # Contraseña — llenar via JS
-    r_pass = await neo_page.evaluate(f"""
-    (val) => {{
-        var inputs = Array.from(document.querySelectorAll('input[type="password"]'));
-        for (var i=0; i<inputs.length; i++) {{
-            if (inputs[i].offsetParent || true) {{
-                inputs[i].value = val;
-                inputs[i].dispatchEvent(new Event('input', {{bubbles:true}}));
-                inputs[i].dispatchEvent(new Event('change', {{bubbles:true}}));
-                return 'ok:' + inputs[i].id;
-            }}
-        }}
-        return 'not_found';
-    }}
-    """, NEOMANTE_PASS)
-    print(f"  pass fill: {r_pass}")
-
-    # Botón Ingresar — click via JS
-    r_btn = await neo_page.evaluate("""
+    # ── Seleccionar pestaña "Coordinado" via JS ───────────────────────────────
+    # El login tiene 4 pestañas: Centro de Control | Empresa | Coordinado | Coordinador
+    # Debemos hacer click en "Coordinado" (exactamente, no "Coordinador")
+    r_tab = await neo_page.evaluate("""
     () => {
-        var btns = Array.from(document.querySelectorAll('button, input[type="submit"]'));
-        for (var i=0; i<btns.length; i++) {
-            var t = (btns[i].innerText || btns[i].value || '').trim();
-            if (t === 'Ingresar') {
-                btns[i].click();
-                return 'ok:' + t;
+        // Buscar todos los elementos clickeables que digan exactamente "Coordinado"
+        var all = Array.from(document.querySelectorAll('*'));
+        for (var i=0; i<all.length; i++) {
+            var el = all[i];
+            var t = (el.innerText || el.textContent || '').trim();
+            if (t === 'Coordinado' && el.children.length === 0) {
+                el.click();
+                return 'ok:' + el.tagName + ':' + el.className;
             }
         }
         return 'not_found';
     }
     """)
-    print(f"  btn Ingresar: {r_btn}")
+    print(f"  tab Coordinado: {r_tab}")
+    await neo_page.wait_for_timeout(2000)
+    await screenshot(neo_page, "neomante_pre_fill")
+
+    # ── Email (ID conocido: email_coordinado) ─────────────────────────────────
+    r_email = await neo_page.evaluate("""
+    (val) => {
+        // Usar ID exacto que vimos en el log anterior: email_coordinado
+        var el = document.getElementById('email_coordinado');
+        if (el) {
+            el.value = val;
+            el.dispatchEvent(new Event('input', {bubbles:true}));
+            el.dispatchEvent(new Event('change', {bubbles:true}));
+            return 'ok_by_id:email_coordinado';
+        }
+        // Fallback por tipo email
+        var inputs = Array.from(document.querySelectorAll('input[type="email"], input[placeholder="Email"]'));
+        for (var i=0; i<inputs.length; i++) {
+            inputs[i].value = val;
+            inputs[i].dispatchEvent(new Event('input', {bubbles:true}));
+            inputs[i].dispatchEvent(new Event('change', {bubbles:true}));
+            return 'ok_fallback:' + inputs[i].id;
+        }
+        return 'not_found';
+    }
+    """, NEOMANTE_USER)
+    print(f"  email fill: {r_email}")
+    await neo_page.wait_for_timeout(300)
+
+    # ── Contraseña (ID conocido: password_centro_control) ─────────────────────
+    r_pass = await neo_page.evaluate("""
+    (val) => {
+        // ID visto en log anterior: password_centro_control
+        var el = document.getElementById('password_centro_control');
+        if (el) {
+            el.value = val;
+            el.dispatchEvent(new Event('input', {bubbles:true}));
+            el.dispatchEvent(new Event('change', {bubbles:true}));
+            return 'ok_by_id:password_centro_control';
+        }
+        // Fallback
+        var inputs = Array.from(document.querySelectorAll('input[type="password"]'));
+        for (var i=0; i<inputs.length; i++) {
+            inputs[i].value = val;
+            inputs[i].dispatchEvent(new Event('input', {bubbles:true}));
+            inputs[i].dispatchEvent(new Event('change', {bubbles:true}));
+            return 'ok_fallback:' + inputs[i].id;
+        }
+        return 'not_found';
+    }
+    """, NEOMANTE_PASS)
+    print(f"  pass fill: {r_pass}")
+    await neo_page.wait_for_timeout(300)
+
+    # ── Click en Ingresar via Playwright nativo ───────────────────────────────
+    await neo_page.click('button:has-text("Ingresar")', timeout=10_000)
     await neo_page.wait_for_load_state("networkidle", timeout=30_000)
     await neo_page.wait_for_timeout(2000)
     await screenshot(neo_page, "neomante_post_login")
     print("  OK: sesión Neomante iniciada")
 
-    # Switch a SOCIEDAD TRANSMISORA METROPOLITANA S.A.
+    # ── Switch a SOCIEDAD TRANSMISORA METROPOLITANA S.A. ─────────────────────
     print("  Haciendo switch a SOCIEDAD TRANSMISORA METROPOLITANA S.A...")
     try:
-        # Click en el nombre de empresa en el header (arriba a la derecha)
-        await neo_page.click('text="SISTEMA DE TRANSMISIÓN DEL SUR S.A."', timeout=10_000)
-        await neo_page.wait_for_timeout(1500)
+        # El nombre de empresa aparece en el header — puede tener texto ligeramente distinto
+        # Usar JS para encontrar y clickear cualquier elemento que contenga ese texto
+        r_switch_menu = await neo_page.evaluate("""
+        () => {
+            var all = Array.from(document.querySelectorAll('*'));
+            for (var i=0; i<all.length; i++) {
+                var t = (all[i].innerText || '').trim();
+                if (t.includes('TRANSMISIÓN DEL SUR') || t.includes('TRANSMISION DEL SUR')) {
+                    all[i].click();
+                    return 'ok:' + all[i].tagName + ':' + t.substring(0,50);
+                }
+            }
+            return 'not_found';
+        }
+        """)
+        print(f"  switch menu: {r_switch_menu}")
+        await neo_page.wait_for_timeout(2000)
         await screenshot(neo_page, "neomante_switch_menu")
 
-        # Buscar y clickear la opción de switch
-        await neo_page.click('text="SOCIEDAD TRANSMISORA METROPOLITANA S.A"', timeout=10_000)
+        # Hacer click en la opción SOCIEDAD TRANSMISORA METROPOLITANA S.A.
+        r_switch = await neo_page.evaluate("""
+        () => {
+            var all = Array.from(document.querySelectorAll('a, li, div, span, button'));
+            for (var i=0; i<all.length; i++) {
+                var t = (all[i].innerText || all[i].textContent || '').trim();
+                if (t.includes('TRANSMISORA METROPOLITANA')) {
+                    all[i].click();
+                    return 'ok:' + all[i].tagName + ':' + t.substring(0,60);
+                }
+            }
+            return 'not_found';
+        }
+        """)
+        print(f"  switch empresa: {r_switch}")
         await neo_page.wait_for_load_state("networkidle", timeout=20_000)
         await neo_page.wait_for_timeout(2000)
         await screenshot(neo_page, "neomante_post_switch")
