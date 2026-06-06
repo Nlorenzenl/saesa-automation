@@ -1389,8 +1389,35 @@ async def hacer_login_neomante(neo_page):
     print(f"  pass fill: {r_pass}")
     await neo_page.wait_for_timeout(300)
 
-    # ── Click en Ingresar via Playwright nativo ───────────────────────────────
-    await neo_page.click('button:has-text("Ingresar")', timeout=10_000)
+    # ── Click en Ingresar — usar el botón visible de la pestaña Coordinado ──────
+    # Hay 4 botones "Ingresar" (uno por pestaña). Clickear el que está visible.
+    r_ingresar = await neo_page.evaluate("""
+    () => {
+        var btns = Array.from(document.querySelectorAll('button'));
+        for (var i=0; i<btns.length; i++) {
+            var btn = btns[i];
+            var t = (btn.innerText || '').trim();
+            if (t !== 'Ingresar') continue;
+            // Clickear el que esté visible (offsetParent != null)
+            if (btn.offsetParent) {
+                btn.click();
+                return 'ok:' + btn.id;
+            }
+        }
+        // Fallback: clickear por ID del formulario de Coordinado
+        // El email_coordinado nos indica que el form correcto es el de Coordinado
+        var emailEl = document.getElementById('email_coordinado');
+        if (emailEl) {
+            var form = emailEl.closest('form');
+            if (form) {
+                var submitBtn = form.querySelector('button[type="submit"]');
+                if (submitBtn) { submitBtn.click(); return 'ok_form:' + submitBtn.id; }
+            }
+        }
+        return 'not_found';
+    }
+    """)
+    print(f"  btn Ingresar: {r_ingresar}")
     await neo_page.wait_for_load_state("networkidle", timeout=30_000)
     await neo_page.wait_for_timeout(2000)
     await screenshot(neo_page, "neomante_post_login")
