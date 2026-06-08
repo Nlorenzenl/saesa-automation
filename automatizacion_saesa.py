@@ -1553,80 +1553,74 @@ async def crear_aviso_cen(neo_page, datos):
         ssee_buscar = re.sub(r'^S/?E\s+', '', ssee_nombre, flags=re.IGNORECASE).strip()
         print(f"  Subestación a buscar: '{ssee_buscar}' (raw: '{ssee_raw}')")
 
-        # Paso previo: clickear radio "Todas las subestaciones" (id=todas)
-        # para que el Select2 cargue todas las opciones disponibles
+        # Paso 1: clickear radio "Todas las subestaciones"
         r_radio = await neo_page.evaluate("""
         () => {
-            // Radio buttons: propietario=Mis subestaciones, todas=Todas las subestaciones
             var radio = document.getElementById('todas');
-            if (radio) {
-                radio.click();
-                return 'ok:radio_todas';
-            }
-            // Fallback: buscar por label
+            if (radio) { radio.click(); return 'ok:radio_todas'; }
             var labels = Array.from(document.querySelectorAll('label'));
             for (var i=0; i<labels.length; i++) {
-                var t = (labels[i].innerText || '').trim();
-                if (t === 'Todas las subestaciones') {
-                    labels[i].click();
-                    return 'ok:label_todas';
+                if ((labels[i].innerText || '').trim() === 'Todas las subestaciones') {
+                    labels[i].click(); return 'ok:label_todas';
                 }
             }
             return 'not_found';
         }
         """)
         print(f"  Radio todas: {r_radio}")
-        await neo_page.wait_for_timeout(1000)
+        # Esperar a que el Select2 se actualice tras el cambio de radio
+        await neo_page.wait_for_timeout(1500)
 
-        # Abrir el Select2 clickeando su contenedor
-        r_s2_open = await neo_page.evaluate("""
-        () => {
-            var container = document.querySelector('.select2-container, .select2-selection');
-            if (container) { container.click(); return 'ok:' + container.className; }
-            return 'not_found';
-        }
-        """)
-        print(f"  Select2 open: {r_s2_open}")
+        # Paso 2: clickear el Select2 usando Playwright (más confiable que JS)
+        try:
+            await neo_page.click('.select2-selection', timeout=5000)
+            print("  Select2 click: ok (Playwright)")
+        except Exception:
+            # Fallback JS
+            await neo_page.evaluate("""
+            () => {
+                var s = document.querySelector('.select2-container, .select2-selection');
+                if (s) s.click();
+            }
+            """)
+            print("  Select2 click: fallback JS")
+        await neo_page.wait_for_timeout(800)
 
-        # Esperar a que el input de búsqueda aparezca — Select2 lo renderiza en el <body>
+        # Paso 3: esperar el input de búsqueda y escribir con Playwright
         try:
             await neo_page.wait_for_selector(
-                '.select2-search__field, .select2-dropdown input',
+                '.select2-search__field',
                 state='visible',
                 timeout=5000
             )
             print("  Select2 input visible ✓")
-        except Exception:
-            print("  ADVERTENCIA: Select2 input no detectado, intentando igual")
-        await neo_page.wait_for_timeout(300)
-
-        # Escribir en el input — Select2 v4 lo renderiza fuera del contenedor, en el body
-        r_s2_type = await neo_page.evaluate("""
-        (buscar) => {
-            var input = document.querySelector(
-                '.select2-dropdown .select2-search__field, '
-                + '.select2-search--dropdown .select2-search__field, '
-                + '.select2-container--open .select2-search__field, '
-                + 'input.select2-search__field'
-            );
-            if (input) {
-                input.focus();
-                input.value = buscar;
-                input.dispatchEvent(new Event('input', {bubbles:true}));
-                input.dispatchEvent(new KeyboardEvent('keyup', {bubbles:true, key: buscar.slice(-1)}));
-                return 'ok:' + input.className;
+            await neo_page.fill('.select2-search__field', ssee_buscar)
+            print(f"  Select2 type (Playwright fill): ok")
+        except Exception as e_s2:
+            print(f"  Select2 fill falló ({e_s2}), intentando JS")
+            await neo_page.evaluate("""
+            (buscar) => {
+                var input = document.querySelector('.select2-search__field');
+                if (input) {
+                    input.focus();
+                    input.value = buscar;
+                    input.dispatchEvent(new Event('input', {bubbles:true}));
+                    input.dispatchEvent(new KeyboardEvent('keyup', {bubbles:true}));
+                }
             }
-            // Diagnóstico: listar inputs visibles para debug
-            var todos = Array.from(document.querySelectorAll('input')).filter(
-                function(i) { return i.offsetParent; }
-            ).map(function(i) { return i.className + '|' + i.id; });
-            return 'not_found | inputs_visibles: ' + JSON.stringify(todos.slice(0, 8));
-        }
-        """, ssee_buscar)
-        print(f"  Select2 type: {r_s2_type}")
-        await neo_page.wait_for_timeout(1000)
+            """, ssee_buscar)
+        await neo_page.wait_for_timeout(1200)
 
-        # Clickear la primera opción que coincide
+        # Paso 4: clickear la primera opción que coincide
+        try:
+            await neo_page.wait_for_selector(
+                '.select2-results__option',
+                state='visible',
+                timeout=5000
+            )
+        except Exception:
+            print("  ADVERTENCIA: opciones Select2 no aparecieron")
+
         r_s2_pick = await neo_page.evaluate("""
         (buscar) => {
             var opts = Array.from(document.querySelectorAll(
@@ -1634,6 +1628,7 @@ async def crear_aviso_cen(neo_page, datos):
                 + '.select2-dropdown li, .select2-results li'
             ));
             var buscarUpper = buscar.toUpperCase();
+            // Primera pasada: coincidencia parcial con el nombre buscado
             for (var i=0; i<opts.length; i++) {
                 var t = (opts[i].innerText || opts[i].textContent || '').trim().toUpperCase();
                 if (t.includes(buscarUpper) && !t.includes('SELECCIONE') && !t.includes('SEARCHING')) {
@@ -1649,7 +1644,11 @@ async def crear_aviso_cen(neo_page, datos):
                     return 'ok_first:' + t2;
                 }
             }
-            return 'not_found | opts=' + opts.length;
+            // Diagnóstico
+            var textos = opts.map(function(o) {
+                return (o.innerText || o.textContent || '').trim();
+            }).slice(0, 5);
+            return 'not_found | opts=' + opts.length + ' | textos=' + JSON.stringify(textos);
         }
         """, ssee_buscar)
         print(f"  Select2 pick: {r_s2_pick}")
