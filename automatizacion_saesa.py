@@ -172,17 +172,9 @@ JS_PT_EXISTE = """
 }
 """
 
-# Lee el detalle completo del PT seleccionado en el panel inferior de Centrality
 JS_LEER_DETALLE_PT = """
 () => {
-    // El detalle aparece en el panel inferior con etiquetas y valores
     var detalle = {};
-
-    // Buscar todas las celdas de la tabla de detalle
-    var celdas = Array.from(document.querySelectorAll(
-        ".x-panel-body table td, .x-grid3-body td"
-    ));
-
     var campos = [
         "Identificador", "Fecha de recepción", "Tipo de permiso de trabajo",
         "Instalación", "Instalación a intervenir", "Detalle de instalación",
@@ -195,13 +187,9 @@ JS_LEER_DETALLE_PT = """
         "Caso", "Editable por", "Responsable del caso",
         "Fuera de plazo", "Requiere planificación de faena", "Requiere evaluación de riesgos"
     ];
-
-    // Buscar en el DOM del panel de detalle
     var panelDetalle = document.querySelector(".x-panel-body");
     if (!panelDetalle) return detalle;
-
     var tds = Array.from(panelDetalle.querySelectorAll("td"));
-
     for (var i = 0; i < tds.length - 1; i++) {
         var label = (tds[i].innerText || "").trim().replace(/:$/, "");
         if (campos.indexOf(label) >= 0) {
@@ -209,7 +197,6 @@ JS_LEER_DETALLE_PT = """
             detalle[label] = valor;
         }
     }
-
     return detalle;
 }
 """
@@ -263,29 +250,22 @@ def extraer_info_fila(row):
 
 
 def determinar_tipo_trabajo(tipo_pt_texto):
-    """Mapea el tipo de PT de Centrality al tipo en OPAT."""
     t = (tipo_pt_texto or "").upper()
     if "DESCONEX" in t:
         return "DESCONEXIÓN"
     if "INTERVEN" in t:
         return "INTERVENCIÓN"
-    return "DESCONEXIÓN"  # default
+    return "DESCONEXIÓN"
 
 
 def parsear_fecha_hora(texto):
-    """
-    Parsea 'DD/MM/YYYY HH:MM:SS' o 'DD/MM/YYYY HH:MM' o '01/06/2026 09:00:00'
-    Devuelve (fecha_mm_dd_yyyy, hora_hh_mm_ampm) para OPAT.
-    Ej: ('06/01/2026', '09:00 AM')
-    """
     try:
         texto = normalizar(texto)
-        # Intentar varios formatos
         for fmt in ["%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"]:
             try:
                 dt = datetime.strptime(texto, fmt)
-                fecha = dt.strftime("%m/%d/%Y")   # OPAT usa mm/dd/yyyy
-                hora  = dt.strftime("%I:%M %p")    # ej: 09:00 AM
+                fecha = dt.strftime("%m/%d/%Y")
+                hora  = dt.strftime("%I:%M %p")
                 return fecha, hora
             except ValueError:
                 continue
@@ -481,19 +461,13 @@ async def seleccionar_fila_pt(page, frame, pt_id):
 # =============================================================================
 
 async def leer_detalle_pt(page, frame, pt_id):
-    """
-    Selecciona la fila y lee todos los campos del panel inferior de detalle.
-    Devuelve un dict con los datos necesarios para OPAT.
-    """
     try:
-        # Asegurarse de que la fila esté seleccionada
         await seleccionar_fila_pt(page, frame, pt_id)
         await page.wait_for_timeout(1500)
 
         detalle = await frame.evaluate(JS_LEER_DETALLE_PT)
         print(f"    detalle leído: {list(detalle.keys())}")
 
-        # Extraer campos para OPAT
         desde_raw = detalle.get("Desde", "")
         hasta_raw = detalle.get("Hasta", "")
 
@@ -530,7 +504,6 @@ async def leer_detalle_pt(page, frame, pt_id):
 
 async def hacer_login_opat(opat_page):
     print("\n[OPAT] LOGIN")
-    # Reintentar hasta 3 veces si hay timeout
     for intento in range(3):
         try:
             await opat_page.goto(OPAT_URL, wait_until="domcontentloaded", timeout=120_000)
@@ -543,8 +516,6 @@ async def hacer_login_opat(opat_page):
     await opat_page.wait_for_timeout(3000)
     await screenshot(opat_page, "opat_login")
 
-    # Buscar campos de login
-    # Campo "Nombre de Usuario" (placeholder "Ej. admin")
     usuario = await opat_page.query_selector(
         'input[placeholder*="admin"], input[placeholder*="Usuario"], '
         'input[placeholder*="usuario"], input[type="text"]'
@@ -552,7 +523,6 @@ async def hacer_login_opat(opat_page):
     if usuario:
         await usuario.fill(OPAT_USER)
 
-    # Campo Contraseña
     password = await opat_page.query_selector('input[type="password"]')
     if password:
         await password.fill(OPAT_PASS)
@@ -569,24 +539,19 @@ async def hacer_login_opat(opat_page):
 # =============================================================================
 
 async def cerrar_modal_opat(opat_page):
-    """Cierra el modal de OPAT si está abierto, via JS directo."""
     try:
         await opat_page.evaluate("""
         () => {
-            // Cerrar modal Bootstrap via JS
             var modal = document.getElementById('modalEditarPT');
             if (modal && modal.classList.contains('show')) {
-                // Usar Bootstrap JS si está disponible
                 if (window.bootstrap && window.bootstrap.Modal) {
                     var m = window.bootstrap.Modal.getInstance(modal);
                     if (m) { m.hide(); return 'bootstrap_hide'; }
                 }
-                // Fallback: manipular DOM directamente
                 modal.classList.remove('show');
                 modal.style.display = 'none';
                 modal.setAttribute('aria-hidden', 'true');
                 modal.removeAttribute('aria-modal');
-                // Quitar backdrop
                 var backdrops = document.querySelectorAll('.modal-backdrop');
                 backdrops.forEach(function(b) { b.remove(); });
                 document.body.classList.remove('modal-open');
@@ -603,13 +568,10 @@ async def cerrar_modal_opat(opat_page):
 
 
 async def abrir_nuevo_pt_opat(opat_page):
-    """Abre el formulario Nuevo PT via JS para evitar problemas de intercepción."""
     try:
-        # Primero cerrar cualquier modal abierto
         await cerrar_modal_opat(opat_page)
         await opat_page.wait_for_timeout(500)
 
-        # Intentar click normal primero
         try:
             await opat_page.click(
                 'button:has-text("Nuevo PT"), a:has-text("Nuevo PT")',
@@ -617,12 +579,10 @@ async def abrir_nuevo_pt_opat(opat_page):
                 force=True
             )
         except Exception:
-            # Fallback: llamar la función JS directamente
             await opat_page.evaluate("() => { if (typeof abrirNuevoPT === 'function') abrirNuevoPT(); }")
 
         await opat_page.wait_for_timeout(2000)
 
-        # Verificar que el modal se abrió
         modal_visible = await opat_page.evaluate("""
         () => {
             var modal = document.getElementById('modalEditarPT');
@@ -636,15 +596,10 @@ async def abrir_nuevo_pt_opat(opat_page):
 
 
 async def subir_pt_a_opat(opat_page, datos):
-    """
-    Abre el formulario Nuevo PT en OPAT y llena todos los campos.
-    Devuelve True si se guardó exitosamente, False en caso contrario.
-    """
     pt_id = datos["id"]
     print(f"\n[OPAT] Subiendo PT {pt_id}...")
 
     try:
-        # Asegurarse de estar en la página principal de OPAT
         if "agendaopat" not in opat_page.url:
             for intento in range(3):
                 try:
@@ -657,57 +612,10 @@ async def subir_pt_a_opat(opat_page, datos):
                     await opat_page.wait_for_timeout(5000)
             await opat_page.wait_for_timeout(2000)
 
-        # Abrir formulario Nuevo PT (con cierre de modal previo)
         modal_ok = await abrir_nuevo_pt_opat(opat_page)
         print(f"  modal abierto: {modal_ok}")
         await screenshot(opat_page, f"opat_form_{pt_id}")
 
-        # Trabajar dentro del modal #modalEditarPT via JavaScript
-        # Usar JS evaluate para llenar campos directamente, evitando problemas de intercepción
-
-        async def fill_by_id(field_id, value):
-            """Llena un campo por su ID usando JS."""
-            result = await opat_page.evaluate(f"""
-            (val) => {{
-                var el = document.getElementById('{field_id}');
-                if (!el) return 'not_found';
-                el.focus();
-                el.value = val;
-                el.dispatchEvent(new Event('input', {{bubbles:true}}));
-                el.dispatchEvent(new Event('change', {{bubbles:true}}));
-                return 'ok';
-            }}
-            """, value)
-            return result
-
-        async def select_by_id(field_id, value):
-            """Selecciona una opción en un select por su ID usando JS."""
-            result = await opat_page.evaluate(f"""
-            (val) => {{
-                var el = document.getElementById('{field_id}');
-                if (!el) return 'not_found';
-                for (var i=0; i<el.options.length; i++) {{
-                    if (el.options[i].text.trim() === val ||
-                        el.options[i].value === val) {{
-                        el.selectedIndex = i;
-                        el.dispatchEvent(new Event('change', {{bubbles:true}}));
-                        return 'ok:' + el.options[i].text;
-                    }}
-                }}
-                // Fallback: buscar por texto parcial
-                for (var j=0; j<el.options.length; j++) {{
-                    if (el.options[j].text.includes(val)) {{
-                        el.selectedIndex = j;
-                        el.dispatchEvent(new Event('change', {{bubbles:true}}));
-                        return 'partial:' + el.options[j].text;
-                    }}
-                }}
-                return 'not_found_value';
-            }}
-            """, value)
-            return result
-
-        # Primero obtener los IDs reales de los campos del formulario
         campos_info = await opat_page.evaluate("""
         () => {
             var modal = document.getElementById('modalEditarPT');
@@ -733,7 +641,6 @@ async def subir_pt_a_opat(opat_page, datos):
         print(f"  campos_info: {list(campos_info.keys())}")
 
         # ── N° PT ──────────────────────────────────────────────────────────────
-        # Buscar input de N° PT (placeholder "Automático o ingrese")
         r = await opat_page.evaluate(f"""
         (ptId) => {{
             var modal = document.getElementById('modalEditarPT');
@@ -748,7 +655,6 @@ async def subir_pt_a_opat(opat_page, datos):
                     return 'ok:' + inputs[i].id;
                 }}
             }}
-            // Fallback: primer input de texto visible
             for (var j=0; j<inputs.length; j++) {{
                 if (inputs[j].offsetParent) {{
                     inputs[j].value = ptId;
@@ -889,7 +795,6 @@ async def subir_pt_a_opat(opat_page, datos):
             r = await opat_page.evaluate(f"""
             (val) => {{
                 var modal = document.getElementById('modalEditarPT');
-                // SE o Línea: buscar input de texto cerca del label "SE o Línea"
                 var labels = Array.from(modal.querySelectorAll('label'));
                 for (var i=0; i<labels.length; i++) {{
                     var lt = (labels[i].innerText || '').trim();
@@ -906,7 +811,6 @@ async def subir_pt_a_opat(opat_page, datos):
                         }}
                     }}
                 }}
-                // Fallback: buscar por placeholder vacío entre los inputs de texto
                 var inputs = Array.from(modal.querySelectorAll('input[type="text"]'));
                 for (var j=0; j<inputs.length; j++) {{
                     var ph = (inputs[j].placeholder || '').trim();
@@ -985,7 +889,6 @@ async def subir_pt_a_opat(opat_page, datos):
         await screenshot(opat_page, f"opat_pre_guardar_{pt_id}")
 
         # ── GUARDAR Y CERRAR ──────────────────────────────────────────────────
-        # Usar JS para hacer click en el botón Guardar y Cerrar dentro del modal
         r_guardar = await opat_page.evaluate("""
         () => {
             var modal = document.getElementById('modalEditarPT');
@@ -1004,13 +907,11 @@ async def subir_pt_a_opat(opat_page, datos):
         print(f"  Guardar: {r_guardar}")
         await opat_page.wait_for_timeout(3000)
 
-        # Screenshot no-fatal — si falla por timeout no interrumpe el flujo
         try:
             await screenshot(opat_page, f"opat_post_guardar_{pt_id}")
         except Exception:
             print(f"  ADVERTENCIA: screenshot post-guardar falló (no crítico)")
 
-        # Verificar que el modal se cerró
         try:
             modal_aun_abierto = await opat_page.evaluate("""
             () => {
@@ -1023,7 +924,7 @@ async def subir_pt_a_opat(opat_page, datos):
                 await cerrar_modal_opat(opat_page)
                 return False
         except Exception:
-            pass  # Si no podemos verificar, asumir que se guardó
+            pass
 
         print(f"  ✓ PT {pt_id} subido a OPAT exitosamente")
         return True
@@ -1034,7 +935,6 @@ async def subir_pt_a_opat(opat_page, datos):
             await screenshot(opat_page, f"opat_error_{pt_id}")
         except Exception:
             pass
-        # Intentar cerrar modal para no bloquear el siguiente PT
         try:
             await cerrar_modal_opat(opat_page)
         except Exception:
@@ -1204,18 +1104,16 @@ async def aprobar_pts(page, frame, opat_page, neo_page):
                 else:
                     print(f"    ADVERTENCIA: sin datos para OPAT ({pt['id']})")
 
-                # Crear aviso CEN en Neomante
+                # ── 10. CREAR AVISO CEN EN NEOMANTE ──────────────────────────
                 numero_cen = None
                 if opat_ok and neo_page:
                     numero_cen = await crear_aviso_cen(neo_page, datos_opat)
-                    # Actualizar campo modAvisoCen en OPAT con el número obtenido
                     if numero_cen and opat_page:
                         try:
                             await opat_page.evaluate(f"""
                             (num) => {{
                                 var el = document.getElementById('modAvisoCen');
                                 if (!el) {{
-                                    // Buscar por el aviso CEN en el modal abierto más reciente
                                     var inputs = Array.from(document.querySelectorAll('input'));
                                     for (var i=0; i<inputs.length; i++) {{
                                         if ((inputs[i].placeholder||'').toLowerCase().includes('cen') ||
@@ -1265,33 +1163,25 @@ async def aprobar_pts(page, frame, opat_page, neo_page):
     return pts_aprobados, pts_fallidos, pts_omitidos
 
 
-
 # =============================================================================
 # NEOMANTE — HELPERS
 # =============================================================================
 
 NEOMANTE_TRABAJO_SOBRE_MAP = {
-    # Paños
     "int ": "Paños", "alim": "Paños", "alimentador": "Paños",
     "paño": "Paños", "pano": "Paños", "bco": "Paños",
-    # Transformador
     "trafo": "Transformador", "transformador": "Transformador",
     "t2d": "Transformador", " at": "Transformador", " ht": "Transformador",
     "autotransf": "Transformador",
-    # Secciones de barra
     "barra": "Secciones de barra", "secc": "Secciones de barra",
     "sección": "Secciones de barra", "seccion": "Secciones de barra",
-    # Scada
     "scada": "Scada", "utr": "Scada", "control y": "Scada",
-    # Compensadores
     "compensador": "Compensadores", "reactor": "Compensadores",
-    # Medidores
     "medidor": "Medidores de facturación",
 }
 
 
 def determinar_trabajo_sobre(instalacion_a_intervenir: str, detalle_instalacion: str) -> str:
-    """Determina la opción 'Trabajo Sobre' de Neomante según datos del PT."""
     textos = [
         (instalacion_a_intervenir or "").lower(),
         (detalle_instalacion or "").lower(),
@@ -1304,17 +1194,11 @@ def determinar_trabajo_sobre(instalacion_a_intervenir: str, detalle_instalacion:
 
 
 def extraer_codigo_componente(detalle_instalacion: str) -> str:
-    """
-    Extrae el código del componente de la última parte del texto.
-    Ej: 'INT 12kV BCO 1A' → '1A'
-         'T2D AT1' → 'AT1'
-         'BARRA 220kV' → '220kV'
-    """
     if not detalle_instalacion:
         return ""
     partes = detalle_instalacion.strip().split()
     if partes:
-        return partes[-1]  # última palabra
+        return partes[-1]
     return detalle_instalacion.strip()
 
 
@@ -1338,12 +1222,9 @@ async def hacer_login_neomante(neo_page):
     await neo_page.wait_for_timeout(2000)
     await screenshot(neo_page, "neomante_login")
 
-    # ── Seleccionar pestaña "Coordinado" via JS ───────────────────────────────
-    # El login tiene 4 pestañas: Centro de Control | Empresa | Coordinado | Coordinador
-    # Debemos hacer click en "Coordinado" (exactamente, no "Coordinador")
+    # ── Seleccionar pestaña "Coordinado" ─────────────────────────────────────
     r_tab = await neo_page.evaluate("""
     () => {
-        // Buscar todos los elementos clickeables que digan exactamente "Coordinado"
         var all = Array.from(document.querySelectorAll('*'));
         for (var i=0; i<all.length; i++) {
             var el = all[i];
@@ -1360,7 +1241,7 @@ async def hacer_login_neomante(neo_page):
     await neo_page.wait_for_timeout(2000)
     await screenshot(neo_page, "neomante_pre_fill")
 
-    # ── Email — ID exacto confirmado: email_coordinado ────────────────────────
+    # ── Email ─────────────────────────────────────────────────────────────────
     r_email = await neo_page.evaluate("""
     (val) => {
         var el = document.getElementById('email_coordinado');
@@ -1376,9 +1257,7 @@ async def hacer_login_neomante(neo_page):
     print(f"  email fill: {r_email}")
     await neo_page.wait_for_timeout(300)
 
-    # ── Contraseña — ID exacto confirmado: password_coordinado ───────────────
-    # IMPORTANTE: NO usar password_centro_control (está oculto)
-    # El campo visible para Coordinado es password_coordinado
+    # ── Contraseña ────────────────────────────────────────────────────────────
     r_pass = await neo_page.evaluate("""
     (val) => {
         var el = document.getElementById('password_coordinado');
@@ -1388,7 +1267,6 @@ async def hacer_login_neomante(neo_page):
             el.dispatchEvent(new Event('change', {bubbles:true}));
             return 'ok_by_id:password_coordinado';
         }
-        // Fallback: primer input password visible
         var inputs = Array.from(document.querySelectorAll('input[type="password"]'));
         for (var i=0; i<inputs.length; i++) {
             if (inputs[i].offsetParent) {
@@ -1404,10 +1282,9 @@ async def hacer_login_neomante(neo_page):
     print(f"  pass fill: {r_pass}")
     await neo_page.wait_for_timeout(300)
 
-    # ── Click en Ingresar — botón visible del form Coordinado ─────────────────
+    # ── Click Ingresar ────────────────────────────────────────────────────────
     r_btn = await neo_page.evaluate("""
     () => {
-        // Buscar el form que contiene email_coordinado
         var emailEl = document.getElementById('email_coordinado');
         if (emailEl) {
             var form = emailEl.closest('form');
@@ -1416,7 +1293,6 @@ async def hacer_login_neomante(neo_page):
                 if (btn) { btn.click(); return 'ok_form:' + btn.id; }
             }
         }
-        // Fallback: botón visible
         var btns = Array.from(document.querySelectorAll('button'));
         for (var i=0; i<btns.length; i++) {
             if ((btns[i].innerText||'').trim()==='Ingresar' && btns[i].offsetParent) {
@@ -1433,80 +1309,147 @@ async def hacer_login_neomante(neo_page):
     await screenshot(neo_page, "neomante_post_login")
     print("  OK: sesión Neomante iniciada")
 
-    # ── Switch a SOCIEDAD TRANSMISORA METROPOLITANA S.A. ─────────────────────
+    # =========================================================================
+    # SWITCH A SOCIEDAD TRANSMISORA METROPOLITANA S.A.
+    # FIX: clickear el <a class="dropdown-toggle"> dentro de li.user-empresa
+    #      NO el <b> ni el texto interno — Bootstrap 3 escucha el toggle
+    # =========================================================================
     print("  Haciendo switch a SOCIEDAD TRANSMISORA METROPOLITANA S.A...")
     try:
-        # El nombre de empresa aparece en el header — puede tener texto ligeramente distinto
-        # Usar JS para encontrar y clickear cualquier elemento que contenga ese texto
+        # ── DIAGNÓSTICO: leer aria-expanded antes del click ───────────────────
+        aria_antes = await neo_page.evaluate("""
+        () => {
+            var toggle = document.querySelector('li.user-empresa a.dropdown-toggle');
+            if (!toggle) return 'toggle_not_found';
+            return 'aria-expanded=' + toggle.getAttribute('aria-expanded')
+                   + ' | li.classes=' + toggle.closest('li').className;
+        }
+        """)
+        print(f"  [DIAG] toggle antes del click: {aria_antes}")
+
+        # ── CLICK en el dropdown-toggle correcto ──────────────────────────────
         r_switch_menu = await neo_page.evaluate("""
         () => {
-            var all = Array.from(document.querySelectorAll('*'));
-            for (var i=0; i<all.length; i++) {
-                var t = (all[i].innerText || '').trim();
+            // Selector preciso: <a class="dropdown-toggle"> dentro de li.user-empresa
+            var toggle = document.querySelector('li.user-empresa a.dropdown-toggle');
+            if (toggle) {
+                toggle.click();
+                return 'ok:a.dropdown-toggle en li.user-empresa';
+            }
+            // Fallback 1: cualquier a.dropdown-toggle que contenga el texto
+            var toggles = Array.from(document.querySelectorAll('a.dropdown-toggle'));
+            for (var i=0; i<toggles.length; i++) {
+                var t = (toggles[i].innerText || '').trim();
                 if (t.includes('TRANSMISIÓN DEL SUR') || t.includes('TRANSMISION DEL SUR')) {
-                    all[i].click();
-                    return 'ok:' + all[i].tagName + ':' + t.substring(0,50);
+                    toggles[i].click();
+                    return 'ok_fallback1:' + t.substring(0, 50);
+                }
+            }
+            // Fallback 2: dispatchEvent manual sobre el <a> dentro del li
+            var li = document.querySelector('li.user-empresa');
+            if (li) {
+                var a = li.querySelector('a');
+                if (a) {
+                    a.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true}));
+                    return 'ok_fallback2_dispatch';
                 }
             }
             return 'not_found';
         }
         """)
-        print(f"  switch menu: {r_switch_menu}")
-        await neo_page.wait_for_timeout(2000)
+        print(f"  switch menu click: {r_switch_menu}")
+
+        # ── DIAGNÓSTICO: leer aria-expanded después del click ─────────────────
+        await neo_page.wait_for_timeout(600)
+        aria_despues = await neo_page.evaluate("""
+        () => {
+            var toggle = document.querySelector('li.user-empresa a.dropdown-toggle');
+            if (!toggle) return 'toggle_not_found';
+            var li = toggle.closest('li');
+            var menu = li ? li.querySelector('ul.dropdown-menu') : null;
+            return 'aria-expanded=' + toggle.getAttribute('aria-expanded')
+                   + ' | li.open=' + (li ? li.classList.contains('open') : 'N/A')
+                   + ' | menu_visible=' + (menu ? (menu.style.display !== 'none') : 'no_menu');
+        }
+        """)
+        print(f"  [DIAG] toggle después del click: {aria_despues}")
+
+        # ── Esperar que el dropdown-menu sea visible ──────────────────────────
+        try:
+            await neo_page.wait_for_selector(
+                'li.user-empresa ul.dropdown-menu',
+                state='visible',
+                timeout=5000
+            )
+            print("  dropdown-menu visible ✓")
+        except Exception:
+            print("  ADVERTENCIA: dropdown-menu no detectado como visible, intentando igual")
+
+        await neo_page.wait_for_timeout(500)
         await screenshot(neo_page, "neomante_switch_menu")
 
-        # Hacer click en la opción SOCIEDAD TRANSMISORA METROPOLITANA S.A.
-        # IMPORTANTE: buscar el texto exacto sin "II" para evitar elegir METROPOLITANA II
+        # ── Hacer click en SOCIEDAD TRANSMISORA METROPOLITANA S.A. ───────────
+        # Buscar DENTRO del dropdown-menu de user-empresa para mayor precisión
         r_switch = await neo_page.evaluate("""
         () => {
-            var all = Array.from(document.querySelectorAll('a, li, div, span, button'));
-            // Primera pasada: buscar coincidencia exacta
-            for (var i=0; i<all.length; i++) {
-                var t = (all[i].innerText || all[i].textContent || '').trim();
+            // Buscar en el scope del dropdown-menu de user-empresa
+            var menu = document.querySelector('li.user-empresa ul.dropdown-menu');
+            var scope = menu || document;
+            var items = Array.from(scope.querySelectorAll('a, li'));
+
+            // Primera pasada: coincidencia exacta
+            for (var i=0; i<items.length; i++) {
+                var t = (items[i].innerText || items[i].textContent || '').trim();
                 if (t === 'Switch como SOCIEDAD TRANSMISORA METROPOLITANA S.A.') {
-                    all[i].click();
-                    return 'ok_exact:' + all[i].tagName + ':' + t;
+                    items[i].click();
+                    return 'ok_exact:' + t;
                 }
             }
-            // Segunda pasada: incluye METROPOLITANA pero NO incluye II ni NORTE ni SUR ni CENTRO
-            for (var j=0; j<all.length; j++) {
-                var t2 = (all[j].innerText || all[j].textContent || '').trim();
+            // Segunda pasada: contiene TRANSMISORA METROPOLITANA pero no variantes
+            for (var j=0; j<items.length; j++) {
+                var t2 = (items[j].innerText || items[j].textContent || '').trim();
                 if (t2.includes('TRANSMISORA METROPOLITANA') &&
-                    !t2.includes(' II ') &&
-                    !t2.includes(' II.') &&
+                    !t2.includes(' II') &&
                     !t2.includes('NORTE') &&
                     !t2.includes('SUR') &&
                     !t2.includes('CENTRO')) {
-                    all[j].click();
-                    return 'ok_filtered:' + all[j].tagName + ':' + t2.substring(0,70);
+                    items[j].click();
+                    return 'ok_filtered:' + t2.substring(0, 70);
                 }
             }
-            return 'not_found';
+            // Diagnóstico: listar opciones disponibles en el dropdown
+            var opciones = items.map(function(el) {
+                return (el.innerText || el.textContent || '').trim();
+            }).filter(function(t) { return t.length > 3; });
+            return 'not_found | opciones_disponibles: ' + JSON.stringify(opciones.slice(0, 10));
         }
         """)
         print(f"  switch empresa: {r_switch}")
+
         await neo_page.wait_for_load_state("networkidle", timeout=20_000)
         await neo_page.wait_for_timeout(2000)
         await screenshot(neo_page, "neomante_post_switch")
 
-        # Verificar que el switch fue exitoso
+        # ── DIAGNÓSTICO: verificar empresa activa en el header ────────────────
         empresa_actual = await neo_page.evaluate("""
         () => {
-            // Buscar el nombre de empresa en el header
-            var header = document.querySelector('nav, header, .navbar, #main-header');
-            if (header) return (header.innerText || '').substring(0, 100);
-            // Fallback: buscar en todo el documento
-            var body = document.body;
-            var txt = (body ? body.innerText : '').substring(0, 200);
-            return txt;
+            // Leer el texto del toggle para ver qué empresa quedó activa
+            var toggle = document.querySelector('li.user-empresa a.dropdown-toggle');
+            if (toggle) {
+                var b = toggle.querySelector('b');
+                return b ? (b.innerText || '').trim() : (toggle.innerText || '').trim();
+            }
+            // Fallback: leer el navbar completo
+            var nav = document.querySelector('nav, header, .navbar, .main-header');
+            return nav ? (nav.innerText || '').substring(0, 150) : 'nav_not_found';
         }
         """)
-        print(f"  empresa actual (primeros 100 chars): {empresa_actual[:100] if empresa_actual else 'N/A'}")
+        print(f"  [DIAG] empresa en header post-switch: {empresa_actual}")
 
-        if empresa_actual and 'METROPOLITANA' in empresa_actual.upper() and 'II' not in empresa_actual.upper()[:empresa_actual.upper().find('METROPOLITANA')+20]:
-            print("  OK: switch a SOCIEDAD TRANSMISORA METROPOLITANA S.A.")
+        if empresa_actual and 'METROPOLITANA' in empresa_actual.upper():
+            print("  ✓ OK: switch a SOCIEDAD TRANSMISORA METROPOLITANA S.A. confirmado")
         else:
-            print("  ADVERTENCIA: switch puede no haber funcionado, continuando de todas formas")
+            print("  ADVERTENCIA: no se pudo confirmar el switch, verificar captura neomante_post_switch")
 
     except Exception as e:
         print(f"  ADVERTENCIA switch: {e}")
@@ -1517,19 +1460,13 @@ async def hacer_login_neomante(neo_page):
 # =============================================================================
 
 async def crear_aviso_cen(neo_page, datos):
-    """
-    Crea el aviso al CEN en Neomante con los datos del PT.
-    Devuelve el número de aviso (ej: '2026061675') o None si falló.
-    """
     pt_id = datos["id"]
     print(f"\n[NEOMANTE] Creando aviso CEN para PT {pt_id}...")
 
     try:
-        # Ir al home de Neomante
         await neo_page.goto("https://neomante.coordinador.cl/", wait_until="domcontentloaded", timeout=60_000)
         await neo_page.wait_for_timeout(2000)
 
-        # Click en Desconexión/Intervención → Subestación
         await neo_page.evaluate("""
         () => {
             var all = Array.from(document.querySelectorAll('*'));
@@ -1543,7 +1480,7 @@ async def crear_aviso_cen(neo_page, datos):
         await neo_page.wait_for_timeout(1500)
         await screenshot(neo_page, f"neo_01_tipo_{pt_id}")
 
-        # ── PASO 1: Tipo de Solicitud — usar JS para clicks robustos ─────────────
+        # ── PASO 1: Tipo de Solicitud ─────────────────────────────────────────
         tipo_solicitud = datos.get("tipo_trabajo", "DESCONEXIÓN")
         es_intervencion = "INTERV" in tipo_solicitud.upper()
         print(f"  Tipo solicitud: {tipo_solicitud}")
@@ -1551,15 +1488,14 @@ async def crear_aviso_cen(neo_page, datos):
         r_tipo = await neo_page.evaluate(f"""
         (esIntervencion) => {{
             var btns = Array.from(document.querySelectorAll('button, a, div'));
-            var clicked = false;
             for (var i=0; i<btns.length; i++) {{
                 var t = (btns[i].innerText || btns[i].textContent || '').trim();
                 if (esIntervencion && t === 'Intervención') {{
-                    btns[i].click(); clicked = true;
+                    btns[i].click();
                     return 'ok:Intervención';
                 }}
                 if (!esIntervencion && t === 'Desconexión') {{
-                    btns[i].click(); clicked = true;
+                    btns[i].click();
                     return 'ok:Desconexión';
                 }}
             }}
@@ -1569,7 +1505,6 @@ async def crear_aviso_cen(neo_page, datos):
         print(f"  click tipo: {r_tipo}")
         await neo_page.wait_for_timeout(800)
 
-        # Origen Interno
         r_origen = await neo_page.evaluate("""
         () => {
             var btns = Array.from(document.querySelectorAll('button, a, div'));
@@ -1583,7 +1518,6 @@ async def crear_aviso_cen(neo_page, datos):
         print(f"  Origen Interno: {r_origen}")
         await neo_page.wait_for_timeout(500)
 
-        # Programada
         r_prog = await neo_page.evaluate("""
         () => {
             var btns = Array.from(document.querySelectorAll('button, a, div'));
@@ -1597,7 +1531,6 @@ async def crear_aviso_cen(neo_page, datos):
         print(f"  Programada: {r_prog}")
         await neo_page.wait_for_timeout(500)
 
-        # Siguiente
         r_sig = await neo_page.evaluate("""
         () => {
             var btns = Array.from(document.querySelectorAll('button'));
@@ -1614,26 +1547,21 @@ async def crear_aviso_cen(neo_page, datos):
         await screenshot(neo_page, f"neo_02_subestacion_{pt_id}")
 
         # ── PASO 2: Subestación ───────────────────────────────────────────────
-        # Buscar la subestación por el nombre del Elemento referencia
         ssee_raw = datos.get("se_linea", "")
-        # Limpiar el nombre: quitar "(Subestación)" etc.
         ssee_nombre = re.sub(r'\s*\(.*?\)', '', ssee_raw).strip().upper()
         print(f"  Buscando subestación: {ssee_nombre}")
 
-        # Seleccionar "Mis subestaciones" primero, luego "Todas las subestaciones" si no aparece
         seleccionada = False
         for opcion in ["Mis subestaciones", "Todas las subestaciones"]:
             try:
                 await neo_page.click(f'text="{opcion}"', timeout=5000)
                 await neo_page.wait_for_timeout(1000)
 
-                # Buscar en el select
                 resultado = await neo_page.evaluate(f"""
                 (nombre) => {{
                     var selects = Array.from(document.querySelectorAll('select'));
                     for (var i=0; i<selects.length; i++) {{
                         var opts = Array.from(selects[i].options);
-                        // Buscar coincidencia exacta primero
                         for (var j=0; j<opts.length; j++) {{
                             if (opts[j].text.toUpperCase().includes(nombre)) {{
                                 selects[i].selectedIndex = j;
@@ -1681,7 +1609,7 @@ async def crear_aviso_cen(neo_page, datos):
         instalacion = datos.get("raw", {}).get("Instalación a intervenir", "")
         detalle     = datos.get("componentes", "")
         trabajo_sobre = determinar_trabajo_sobre(instalacion, detalle)
-        print(f"  Trabajo sobre: {trabajo_sobre} (instalacion='{instalacion}', detalle='{detalle}')")
+        print(f"  Trabajo sobre: {trabajo_sobre}")
 
         r_tsobre = await neo_page.evaluate(f"""
         (trabajo) => {{
@@ -1693,7 +1621,6 @@ async def crear_aviso_cen(neo_page, datos):
                     return 'ok:' + all[i].tagName;
                 }}
             }}
-            // Fallback: buscar radio button con ese label
             var labels = Array.from(document.querySelectorAll('label'));
             for (var j=0; j<labels.length; j++) {{
                 if ((labels[j].innerText||'').trim() === trabajo) {{
@@ -1733,7 +1660,6 @@ async def crear_aviso_cen(neo_page, datos):
             var labels = Array.from(document.querySelectorAll('label'));
             var items = [];
 
-            // Construir lista de (checkbox, texto)
             for (var i=0; i<labels.length; i++) {{
                 var lbl = labels[i];
                 var txt = (lbl.innerText || '').trim().toUpperCase();
@@ -1748,7 +1674,6 @@ async def crear_aviso_cen(neo_page, datos):
                 items.push({{cb: cb, txt: txt}});
             }}
 
-            // También checkboxes directos
             for (var j=0; j<checkboxes.length; j++) {{
                 var sibling = checkboxes[j].nextSibling;
                 var txt2 = sibling ? (sibling.textContent || '').trim().toUpperCase() : '';
@@ -1759,7 +1684,6 @@ async def crear_aviso_cen(neo_page, datos):
 
             var codigoUpper = (codigo || '').toUpperCase();
 
-            // Buscar por coincidencia del código
             if (codigoUpper.length > 0) {{
                 for (var k=0; k<items.length; k++) {{
                     if (items[k].txt.includes(codigoUpper)) {{
@@ -1770,7 +1694,6 @@ async def crear_aviso_cen(neo_page, datos):
                 }}
             }}
 
-            // Fallback: primer elemento disponible
             items[0].cb.checked = true;
             items[0].cb.dispatchEvent(new Event('change', {{bubbles:true}}));
             return 'ok_first:' + items[0].txt;
@@ -1805,7 +1728,7 @@ async def crear_aviso_cen(neo_page, datos):
         await neo_page.wait_for_load_state("networkidle", timeout=20_000)
         await neo_page.wait_for_timeout(1000)
 
-        # ── PASO 6: Consumo → "No tiene consumo afectado" ─────────────────────
+        # ── PASO 6: Consumo ───────────────────────────────────────────────────
         await neo_page.evaluate("""
         () => {
             var all = Array.from(document.querySelectorAll('*'));
@@ -1829,7 +1752,6 @@ async def crear_aviso_cen(neo_page, datos):
         await screenshot(neo_page, f"neo_06_tipo_trabajo_{pt_id}")
 
         # ── PASO 7: Tipo Trabajo ──────────────────────────────────────────────
-        # Seleccionar "Otro tipo de trabajo" en el dropdown
         resultado_tipo = await neo_page.evaluate("""
         () => {
             var selects = Array.from(document.querySelectorAll('select'));
@@ -1848,11 +1770,10 @@ async def crear_aviso_cen(neo_page, datos):
         """)
         print(f"  Tipo trabajo: {resultado_tipo}")
 
-        # Describir el trabajo
         desc = datos.get("descripcion", "")
         textareas = await neo_page.query_selector_all('textarea')
         if len(textareas) >= 1:
-            await textareas[0].fill(desc[:500])  # limitar a 500 chars
+            await textareas[0].fill(desc[:500])
 
         await neo_page.evaluate("""
         () => {
@@ -1865,7 +1786,7 @@ async def crear_aviso_cen(neo_page, datos):
         await neo_page.wait_for_load_state("networkidle", timeout=20_000)
         await neo_page.wait_for_timeout(1000)
 
-        # ── PASO 8: Trabajo Afecta → solo Siguiente ───────────────────────────
+        # ── PASO 8: Trabajo Afecta ────────────────────────────────────────────
         await neo_page.evaluate("""
         () => {
             var btns = Array.from(document.querySelectorAll('button'));
@@ -1896,7 +1817,6 @@ async def crear_aviso_cen(neo_page, datos):
         await screenshot(neo_page, f"neo_07_fecha_{pt_id}")
 
         # ── PASO 10: Fecha / Hora del Trabajo ─────────────────────────────────
-        # Seleccionar "Ninguno de los antecedentes anteriores"
         await neo_page.evaluate("""
         () => {
             var all = Array.from(document.querySelectorAll('*'));
@@ -1908,18 +1828,15 @@ async def crear_aviso_cen(neo_page, datos):
         """)
         await neo_page.wait_for_timeout(500)
 
-        # Llenar fecha y hora de inicio
         if datos.get("fecha_inicio") and datos.get("hora_inicio"):
             dt_inicio = datetime.strptime(
                 datos["fecha_inicio"] + " " + datos["hora_inicio"],
                 "%m/%d/%Y %I:%M %p"
             )
             fecha_hora_inicio = dt_inicio.strftime("%d-%m-%Y %H:%M")
-            # El campo es un input de texto con formato dd-mm-yyyy HH:MM
             await neo_page.evaluate(f"""
             (val) => {{
                 var inputs = Array.from(document.querySelectorAll('input'));
-                // Buscar inputs de fecha/hora (los que tienen el ícono de reloj)
                 for (var i=0; i<inputs.length; i++) {{
                     var inp = inputs[i];
                     if (!inp.offsetParent) continue;
@@ -1933,7 +1850,6 @@ async def crear_aviso_cen(neo_page, datos):
                         return 'ok:' + inp.id;
                     }}
                 }}
-                // Fallback: primer input visible
                 for (var j=0; j<inputs.length; j++) {{
                     if (inputs[j].offsetParent && inputs[j].type !== 'hidden') {{
                         inputs[j].value = val;
@@ -1946,7 +1862,6 @@ async def crear_aviso_cen(neo_page, datos):
             """, fecha_hora_inicio)
             print(f"  Fecha/hora inicio: {fecha_hora_inicio}")
 
-            # Aplicar con el calendario
             try:
                 await neo_page.evaluate("""
                 () => {
@@ -1960,7 +1875,6 @@ async def crear_aviso_cen(neo_page, datos):
             except Exception:
                 pass
 
-        # Llenar fecha y hora de fin
         if datos.get("fecha_fin") and datos.get("hora_fin"):
             dt_fin = datetime.strptime(
                 datos["fecha_fin"] + " " + datos["hora_fin"],
@@ -1983,7 +1897,6 @@ async def crear_aviso_cen(neo_page, datos):
                         return 'ok:' + inp.id;
                     }}
                 }}
-                // Fallback: segundo input visible
                 var visibles = Array.from(document.querySelectorAll('input')).filter(function(i) {{
                     return i.offsetParent && i.type !== 'hidden';
                 }});
@@ -2023,7 +1936,6 @@ async def crear_aviso_cen(neo_page, datos):
         """)
         await neo_page.wait_for_timeout(1500)
 
-        # Confirmar popup "¿Está seguro de enviar la Solicitud?"
         await neo_page.evaluate("""
         () => {
             var btns = Array.from(document.querySelectorAll('button'));
@@ -2036,10 +1948,9 @@ async def crear_aviso_cen(neo_page, datos):
         await neo_page.wait_for_timeout(2000)
         await screenshot(neo_page, f"neo_09_resultado_{pt_id}")
 
-        # ── PASO 12: Capturar número de aviso ────────────────────────────────
+        # ── PASO 12: Capturar número de aviso ─────────────────────────────────
         numero_aviso = await neo_page.evaluate("""
         () => {
-            // Buscar el mensaje de éxito: "Solicitud creada con exito, Número: XXXXXXXXXX"
             var els = Array.from(document.querySelectorAll('*'));
             for (var i=0; i<els.length; i++) {
                 var txt = (els[i].innerText || '').trim();
@@ -2047,7 +1958,6 @@ async def crear_aviso_cen(neo_page, datos):
                     var match = txt.match(/Número:\s*(\d+)/);
                     if (match) return match[1];
                 }
-                // También buscar solo el número en el banner de éxito
                 if (txt.includes('creada con exito')) {
                     var match2 = txt.match(/(\d{10,})/);
                     if (match2) return match2[1];
@@ -2150,7 +2060,6 @@ def enviar_reporte(pts_aprobados, pts_fallidos, pts_omitidos, error_critico=None
             "</div>"
         )
 
-    # Contar subidos a OPAT
     opat_ok_count = sum(1 for pt in pts_aprobados if pt.get("opat"))
     cen_ok_count  = sum(1 for pt in pts_aprobados if pt.get("cen"))
 
@@ -2245,7 +2154,6 @@ async def main():
             ],
         )
 
-        # Dos contextos independientes: uno para Centrality, otro para OPAT
         ctx_centrality = await browser.new_context(
             ignore_https_errors=True,
             viewport={"width": 1400, "height": 900},
@@ -2264,7 +2172,6 @@ async def main():
         page_neomante   = await ctx_neomante.new_page()
 
         try:
-            # Login en los tres sistemas en paralelo
             await asyncio.gather(
                 hacer_login_centrality(page_centrality),
                 hacer_login_opat(page_opat),
