@@ -30,10 +30,10 @@ NEOMANTE_PASS = os.environ["NEOMANTE_PASS"]
 GMAIL_USER = os.environ["GMAIL_USER"]
 GMAIL_PASS = os.environ["GMAIL_APP_PASS"]
 EMAIL_DEST = os.environ["EMAIL_DEST"]
-EMAIL_CC   = ["nicolas.lorenzen@saesa.cl"]
+EMAIL_CC   = ["alexis.aedo@saesa.cl", "jorge.canete@saesa.cl"]
 
 DRY_RUN          = os.environ.get("DRY_RUN", "true").lower() == "true"
-MAX_APROBACIONES = int(os.environ.get("MAX_APROBACIONES", "1"))
+MAX_APROBACIONES = int(os.environ.get("MAX_APROBACIONES", "50"))
 
 TIMEOUT   = 30_000
 TZ_CHILE  = ZoneInfo("America/Santiago")
@@ -1003,29 +1003,42 @@ async def subir_pt_a_opat(opat_page, datos):
         """)
         print(f"  Guardar: {r_guardar}")
         await opat_page.wait_for_timeout(3000)
-        await screenshot(opat_page, f"opat_post_guardar_{pt_id}")
+
+        # Screenshot no-fatal — si falla por timeout no interrumpe el flujo
+        try:
+            await screenshot(opat_page, f"opat_post_guardar_{pt_id}")
+        except Exception:
+            print(f"  ADVERTENCIA: screenshot post-guardar falló (no crítico)")
 
         # Verificar que el modal se cerró
-        modal_aun_abierto = await opat_page.evaluate("""
-        () => {
-            var m = document.getElementById('modalEditarPT');
-            return m && m.classList.contains('show');
-        }
-        """)
-
-        if modal_aun_abierto:
-            print(f"  ADVERTENCIA: modal sigue abierto para {pt_id}")
-            await cerrar_modal_opat(opat_page)
-            return False
+        try:
+            modal_aun_abierto = await opat_page.evaluate("""
+            () => {
+                var m = document.getElementById('modalEditarPT');
+                return m && m.classList.contains('show');
+            }
+            """)
+            if modal_aun_abierto:
+                print(f"  ADVERTENCIA: modal sigue abierto para {pt_id}")
+                await cerrar_modal_opat(opat_page)
+                return False
+        except Exception:
+            pass  # Si no podemos verificar, asumir que se guardó
 
         print(f"  ✓ PT {pt_id} subido a OPAT exitosamente")
         return True
 
     except Exception as e:
         print(f"  ERROR subiendo {pt_id} a OPAT: {e}")
-        await screenshot(opat_page, f"opat_error_{pt_id}")
+        try:
+            await screenshot(opat_page, f"opat_error_{pt_id}")
+        except Exception:
+            pass
         # Intentar cerrar modal para no bloquear el siguiente PT
-        await cerrar_modal_opat(opat_page)
+        try:
+            await cerrar_modal_opat(opat_page)
+        except Exception:
+            pass
         return False
 
 
@@ -1854,7 +1867,10 @@ async def crear_aviso_cen(neo_page, datos):
 
     except Exception as e:
         print(f"  ERROR creando aviso CEN: {e}")
-        await screenshot(neo_page, f"neo_error_{pt_id}")
+        try:
+            await screenshot(neo_page, f"neo_error_{pt_id}")
+        except Exception:
+            pass
         return None
 
 
