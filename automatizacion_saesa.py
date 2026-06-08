@@ -300,7 +300,15 @@ def parsear_fecha_hora(texto):
 
 async def hacer_login_centrality(page):
     print("\n[1] LOGIN CENTRALITY")
-    await page.goto(SAESA_URL, wait_until="domcontentloaded", timeout=60_000)
+    for intento in range(3):
+        try:
+            await page.goto(SAESA_URL, wait_until="domcontentloaded", timeout=120_000)
+            break
+        except Exception as e:
+            print(f"  Centrality goto intento {intento+1} falló: {e}")
+            if intento == 2:
+                raise
+            await page.wait_for_timeout(5000)
     await page.wait_for_timeout(3000)
     usuario = await page.query_selector('input[name="user"], input[type="text"]')
     if usuario:
@@ -1435,14 +1443,29 @@ async def hacer_login_neomante(neo_page):
         await screenshot(neo_page, "neomante_switch_menu")
 
         # Hacer click en la opción SOCIEDAD TRANSMISORA METROPOLITANA S.A.
+        # IMPORTANTE: buscar el texto exacto sin "II" para evitar elegir METROPOLITANA II
         r_switch = await neo_page.evaluate("""
         () => {
             var all = Array.from(document.querySelectorAll('a, li, div, span, button'));
+            // Primera pasada: buscar coincidencia exacta
             for (var i=0; i<all.length; i++) {
                 var t = (all[i].innerText || all[i].textContent || '').trim();
-                if (t.includes('TRANSMISORA METROPOLITANA')) {
+                if (t === 'Switch como SOCIEDAD TRANSMISORA METROPOLITANA S.A.') {
                     all[i].click();
-                    return 'ok:' + all[i].tagName + ':' + t.substring(0,60);
+                    return 'ok_exact:' + all[i].tagName + ':' + t;
+                }
+            }
+            // Segunda pasada: incluye METROPOLITANA pero NO incluye II ni NORTE ni SUR ni CENTRO
+            for (var j=0; j<all.length; j++) {
+                var t2 = (all[j].innerText || all[j].textContent || '').trim();
+                if (t2.includes('TRANSMISORA METROPOLITANA') &&
+                    !t2.includes(' II ') &&
+                    !t2.includes(' II.') &&
+                    !t2.includes('NORTE') &&
+                    !t2.includes('SUR') &&
+                    !t2.includes('CENTRO')) {
+                    all[j].click();
+                    return 'ok_filtered:' + all[j].tagName + ':' + t2.substring(0,70);
                 }
             }
             return 'not_found';
