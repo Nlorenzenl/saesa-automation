@@ -1460,144 +1460,162 @@ async def hacer_login_neomante(neo_page):
 # =============================================================================
 
 async def crear_aviso_cen(neo_page, datos):
+    """
+    Crea el aviso al CEN en Neomante con los datos del PT.
+    Devuelve el número de aviso o None si falló.
+    URL directa al wizard STM — hash fijo del módulo Desconexión/Intervención de STM.
+    """
     pt_id = datos["id"]
     print(f"\n[NEOMANTE] Creando aviso CEN para PT {pt_id}...")
 
-    try:
-        await neo_page.goto("https://neomante.coordinador.cl/", wait_until="domcontentloaded", timeout=60_000)
-        await neo_page.wait_for_timeout(2000)
+    NEO_WIZARD_BASE = "https://neomante.coordinador.cl/desconexion_intervencion/subestacion/6a265819ad651f3ebc05e514"
 
-        await neo_page.evaluate("""
-        () => {
-            var all = Array.from(document.querySelectorAll('*'));
-            for (var i=0; i<all.length; i++) {
-                var t = (all[i].innerText || all[i].textContent || '').trim();
-                if (t === 'Subestación') { all[i].click(); return 'ok'; }
-            }
-        }
-        """)
-        await neo_page.wait_for_load_state("networkidle", timeout=20_000)
-        await neo_page.wait_for_timeout(1500)
+    try:
+        # ── PASO 1: Tipo de Solicitud ─────────────────────────────────────────
+        # Ir directo al wizard de STM — evita ambigüedad del botón Subestación
+        await neo_page.goto(NEO_WIZARD_BASE, wait_until="domcontentloaded", timeout=60_000)
+        await neo_page.wait_for_timeout(2000)
         await screenshot(neo_page, f"neo_01_tipo_{pt_id}")
 
-        # ── PASO 1: Tipo de Solicitud ─────────────────────────────────────────
-        tipo_solicitud = datos.get("tipo_trabajo", "DESCONEXIÓN")
+        tipo_solicitud  = datos.get("tipo_trabajo", "DESCONEXIÓN")
         es_intervencion = "INTERV" in tipo_solicitud.upper()
         print(f"  Tipo solicitud: {tipo_solicitud}")
 
-        r_tipo = await neo_page.evaluate(f"""
-        (esIntervencion) => {{
-            var btns = Array.from(document.querySelectorAll('button, a, div'));
-            for (var i=0; i<btns.length; i++) {{
-                var t = (btns[i].innerText || btns[i].textContent || '').trim();
-                if (esIntervencion && t === 'Intervención') {{
-                    btns[i].click();
-                    return 'ok:Intervención';
-                }}
-                if (!esIntervencion && t === 'Desconexión') {{
-                    btns[i].click();
-                    return 'ok:Desconexión';
-                }}
-            }}
+        # Tiles del wizard: pueden ser <button>, <a>, <div>, <span>, <li>
+        r_tipo = await neo_page.evaluate("""
+        (esIntervencion) => {
+            var target = esIntervencion ? 'Intervención' : 'Desconexión';
+            var all = Array.from(document.querySelectorAll('button, a, div, span, li'));
+            for (var i=0; i<all.length; i++) {
+                var t = (all[i].innerText || all[i].textContent || '').trim();
+                if (t === target) {
+                    all[i].click();
+                    return 'ok:' + all[i].tagName + ':' + all[i].className;
+                }
+            }
             return 'not_found';
-        }}
+        }
         """, es_intervencion)
-        print(f"  click tipo: {r_tipo}")
-        await neo_page.wait_for_timeout(800)
+        print(f"  Tipo click: {r_tipo}")
+        await neo_page.wait_for_timeout(600)
 
         r_origen = await neo_page.evaluate("""
         () => {
-            var btns = Array.from(document.querySelectorAll('button, a, div'));
-            for (var i=0; i<btns.length; i++) {
-                var t = (btns[i].innerText || '').trim();
-                if (t === 'Origen Interno') { btns[i].click(); return 'ok'; }
+            var all = Array.from(document.querySelectorAll('button, a, div, span, li'));
+            for (var i=0; i<all.length; i++) {
+                var t = (all[i].innerText || all[i].textContent || '').trim();
+                if (t === 'Origen Interno') {
+                    all[i].click();
+                    return 'ok:' + all[i].tagName + ':' + all[i].className;
+                }
             }
             return 'not_found';
         }
         """)
         print(f"  Origen Interno: {r_origen}")
-        await neo_page.wait_for_timeout(500)
+        await neo_page.wait_for_timeout(600)
 
         r_prog = await neo_page.evaluate("""
         () => {
-            var btns = Array.from(document.querySelectorAll('button, a, div'));
-            for (var i=0; i<btns.length; i++) {
-                var t = (btns[i].innerText || '').trim();
-                if (t === 'Programada') { btns[i].click(); return 'ok'; }
+            var all = Array.from(document.querySelectorAll('button, a, div, span, li'));
+            for (var i=0; i<all.length; i++) {
+                var t = (all[i].innerText || all[i].textContent || '').trim();
+                if (t === 'Programada') {
+                    all[i].click();
+                    return 'ok:' + all[i].tagName + ':' + all[i].className;
+                }
             }
             return 'not_found';
         }
         """)
         print(f"  Programada: {r_prog}")
-        await neo_page.wait_for_timeout(500)
+        await neo_page.wait_for_timeout(600)
 
-        r_sig = await neo_page.evaluate("""
+        r_sig1 = await neo_page.evaluate("""
         () => {
-            var btns = Array.from(document.querySelectorAll('button'));
+            var btns = Array.from(document.querySelectorAll('button, a'));
             for (var i=0; i<btns.length; i++) {
-                var t = (btns[i].innerText || '').trim();
-                if (t === 'Siguiente') { btns[i].click(); return 'ok'; }
+                var t = (btns[i].innerText || btns[i].textContent || '').trim();
+                if (t === 'Siguiente') { btns[i].click(); return 'ok:' + btns[i].className; }
             }
             return 'not_found';
         }
         """)
-        print(f"  Siguiente paso 1: {r_sig}")
+        print(f"  Siguiente paso 1: {r_sig1}")
         await neo_page.wait_for_load_state("networkidle", timeout=20_000)
         await neo_page.wait_for_timeout(1500)
         await screenshot(neo_page, f"neo_02_subestacion_{pt_id}")
 
-        # ── PASO 2: Subestación ───────────────────────────────────────────────
-        ssee_raw = datos.get("se_linea", "")
-        ssee_nombre = re.sub(r'\s*\(.*?\)', '', ssee_raw).strip().upper()
-        print(f"  Buscando subestación: {ssee_nombre}")
+        # ── PASO 2: Subestación — Select2 ─────────────────────────────────────
+        # "LA PINTANA (Subestación)" → buscar "LA PINTANA"
+        ssee_raw    = datos.get("se_linea", "")
+        ssee_nombre = re.sub(r'\s*\(.*?\)', '', ssee_raw).strip()
+        ssee_buscar = re.sub(r'^S/?E\s+', '', ssee_nombre, flags=re.IGNORECASE).strip()
+        print(f"  Subestación a buscar: '{ssee_buscar}' (raw: '{ssee_raw}')")
 
-        seleccionada = False
-        for opcion in ["Mis subestaciones", "Todas las subestaciones"]:
-            try:
-                await neo_page.click(f'text="{opcion}"', timeout=5000)
-                await neo_page.wait_for_timeout(1000)
+        # Abrir el Select2 clickeando su contenedor
+        r_s2_open = await neo_page.evaluate("""
+        () => {
+            var container = document.querySelector('.select2-container, .select2-selection');
+            if (container) { container.click(); return 'ok:' + container.className; }
+            return 'not_found';
+        }
+        """)
+        print(f"  Select2 open: {r_s2_open}")
+        await neo_page.wait_for_timeout(500)
 
-                resultado = await neo_page.evaluate(f"""
-                (nombre) => {{
-                    var selects = Array.from(document.querySelectorAll('select'));
-                    for (var i=0; i<selects.length; i++) {{
-                        var opts = Array.from(selects[i].options);
-                        for (var j=0; j<opts.length; j++) {{
-                            if (opts[j].text.toUpperCase().includes(nombre)) {{
-                                selects[i].selectedIndex = j;
-                                selects[i].dispatchEvent(new Event('change', {{bubbles:true}}));
-                                return 'ok:' + opts[j].text;
-                            }}
-                        }}
-                    }}
-                    return 'not_found';
-                }}
-                """, ssee_nombre)
-                print(f"  Subestación ({opcion}): {resultado}")
+        # Escribir en el input de búsqueda del Select2
+        r_s2_type = await neo_page.evaluate("""
+        (buscar) => {
+            var input = document.querySelector(
+                '.select2-search__field, .select2-search input, input.select2-input'
+            );
+            if (input) {
+                input.value = buscar;
+                input.dispatchEvent(new Event('input', {bubbles:true}));
+                input.dispatchEvent(new KeyboardEvent('keyup', {bubbles:true}));
+                return 'ok:' + input.className;
+            }
+            return 'not_found';
+        }
+        """, ssee_buscar)
+        print(f"  Select2 type: {r_s2_type}")
+        await neo_page.wait_for_timeout(1000)
 
-                if "ok:" in resultado:
-                    seleccionada = True
-                    break
-            except Exception:
-                continue
-
-        if not seleccionada:
-            print(f"  ADVERTENCIA: subestación no encontrada, seleccionando primera disponible")
-            await neo_page.evaluate("""
-            () => {
-                var s = document.querySelector('select');
-                if (s && s.options.length > 1) {
-                    s.selectedIndex = 1;
-                    s.dispatchEvent(new Event('change', {bubbles:true}));
+        # Clickear la primera opción que coincide
+        r_s2_pick = await neo_page.evaluate("""
+        (buscar) => {
+            var opts = Array.from(document.querySelectorAll(
+                '.select2-results__option, .select2-result'
+            ));
+            var buscarUpper = buscar.toUpperCase();
+            for (var i=0; i<opts.length; i++) {
+                var t = (opts[i].innerText || opts[i].textContent || '').trim().toUpperCase();
+                if (t.includes(buscarUpper) && !t.includes('SELECCIONE')) {
+                    opts[i].click();
+                    return 'ok:' + (opts[i].innerText || '').trim();
                 }
             }
-            """)
+            // Fallback: primera opción no placeholder
+            for (var j=0; j<opts.length; j++) {
+                var t2 = (opts[j].innerText || opts[j].textContent || '').trim();
+                if (t2 && t2 !== 'Seleccione...' && t2 !== 'Searching...') {
+                    opts[j].click();
+                    return 'ok_first:' + t2;
+                }
+            }
+            return 'not_found | opts=' + opts.length;
+        }
+        """, ssee_buscar)
+        print(f"  Select2 pick: {r_s2_pick}")
+        await neo_page.wait_for_timeout(800)
 
         await neo_page.evaluate("""
         () => {
-            var btns = Array.from(document.querySelectorAll('button'));
+            var btns = Array.from(document.querySelectorAll('button, a'));
             for (var i=0; i<btns.length; i++) {
-                if ((btns[i].innerText||'').trim() === 'Siguiente') { btns[i].click(); return 'ok'; }
+                var t = (btns[i].innerText || btns[i].textContent || '').trim();
+                if (t === 'Siguiente') { btns[i].click(); return 'ok'; }
             }
         }
         """)
@@ -1606,46 +1624,35 @@ async def crear_aviso_cen(neo_page, datos):
         await screenshot(neo_page, f"neo_03_trabajo_sobre_{pt_id}")
 
         # ── PASO 3: Trabajo Sobre ─────────────────────────────────────────────
-        instalacion = datos.get("raw", {}).get("Instalación a intervenir", "")
-        detalle     = datos.get("componentes", "")
+        instalacion   = datos.get("raw", {}).get("Instalación a intervenir", "")
+        detalle       = datos.get("componentes", "")
         trabajo_sobre = determinar_trabajo_sobre(instalacion, detalle)
         print(f"  Trabajo sobre: {trabajo_sobre}")
 
-        r_tsobre = await neo_page.evaluate(f"""
-        (trabajo) => {{
-            var all = Array.from(document.querySelectorAll('*'));
-            for (var i=0; i<all.length; i++) {{
+        r_tsobre = await neo_page.evaluate("""
+        (trabajo) => {
+            var all = Array.from(document.querySelectorAll('button, a, div, span, li, label'));
+            for (var i=0; i<all.length; i++) {
                 var t = (all[i].innerText || all[i].textContent || '').trim();
-                if (t === trabajo && all[i].children.length === 0) {{
+                if (t === trabajo) {
                     all[i].click();
-                    return 'ok:' + all[i].tagName;
-                }}
-            }}
-            var labels = Array.from(document.querySelectorAll('label'));
-            for (var j=0; j<labels.length; j++) {{
-                if ((labels[j].innerText||'').trim() === trabajo) {{
-                    labels[j].click();
-                    return 'ok_label:' + labels[j].htmlFor;
-                }}
-            }}
-            return 'not_found';
-        }}
-        """, trabajo_sobre)
-        print(f"  click trabajo sobre: {r_tsobre}")
-        await neo_page.wait_for_timeout(500)
-
-        r_sig3 = await neo_page.evaluate("""
-        () => {
-            var btns = Array.from(document.querySelectorAll('button'));
-            for (var i=0; i<btns.length; i++) {
-                if ((btns[i].innerText||'').trim() === 'Siguiente') {
-                    btns[i].click(); return 'ok';
+                    return 'ok:' + all[i].tagName + ':' + all[i].className;
                 }
             }
             return 'not_found';
         }
+        """, trabajo_sobre)
+        print(f"  Trabajo sobre click: {r_tsobre}")
+        await neo_page.wait_for_timeout(600)
+
+        await neo_page.evaluate("""
+        () => {
+            var btns = Array.from(document.querySelectorAll('button, a'));
+            for (var i=0; i<btns.length; i++) {
+                if ((btns[i].innerText||'').trim() === 'Siguiente') { btns[i].click(); return 'ok'; }
+            }
+        }
         """)
-        print(f"  Siguiente paso 3: {r_sig3}")
         await neo_page.wait_for_load_state("networkidle", timeout=20_000)
         await neo_page.wait_for_timeout(1500)
         await screenshot(neo_page, f"neo_04_elementos_{pt_id}")
@@ -1654,56 +1661,45 @@ async def crear_aviso_cen(neo_page, datos):
         codigo = extraer_codigo_componente(detalle)
         print(f"  Buscando elemento con código: '{codigo}'")
 
-        elemento_marcado = await neo_page.evaluate(f"""
-        (codigo) => {{
-            var checkboxes = Array.from(document.querySelectorAll('input[type="checkbox"]'));
-            var labels = Array.from(document.querySelectorAll('label'));
+        elemento_marcado = await neo_page.evaluate("""
+        (codigo) => {
             var items = [];
-
-            for (var i=0; i<labels.length; i++) {{
-                var lbl = labels[i];
-                var txt = (lbl.innerText || '').trim().toUpperCase();
+            var labels = Array.from(document.querySelectorAll('label'));
+            for (var i=0; i<labels.length; i++) {
+                var txt = (labels[i].innerText || '').trim().toUpperCase();
                 if (txt.length < 3) continue;
-                var cb = null;
-                if (lbl.htmlFor) {{
-                    cb = document.getElementById(lbl.htmlFor);
-                }} else {{
-                    cb = lbl.querySelector('input[type="checkbox"]');
-                }}
-                if (!cb) continue;
-                items.push({{cb: cb, txt: txt}});
-            }}
-
-            for (var j=0; j<checkboxes.length; j++) {{
-                var sibling = checkboxes[j].nextSibling;
-                var txt2 = sibling ? (sibling.textContent || '').trim().toUpperCase() : '';
-                if (txt2.length > 2) items.push({{cb: checkboxes[j], txt: txt2}});
-            }}
-
+                var cb = labels[i].htmlFor
+                    ? document.getElementById(labels[i].htmlFor)
+                    : labels[i].querySelector('input[type="checkbox"]');
+                if (cb) items.push({cb: cb, txt: txt});
+            }
+            var checkboxes = Array.from(document.querySelectorAll('input[type="checkbox"]'));
+            for (var j=0; j<checkboxes.length; j++) {
+                var sib = checkboxes[j].nextSibling;
+                var txt2 = sib ? (sib.textContent || '').trim().toUpperCase() : '';
+                if (txt2.length > 2) items.push({cb: checkboxes[j], txt: txt2});
+            }
             if (items.length === 0) return 'no_items';
-
             var codigoUpper = (codigo || '').toUpperCase();
-
-            if (codigoUpper.length > 0) {{
-                for (var k=0; k<items.length; k++) {{
-                    if (items[k].txt.includes(codigoUpper)) {{
+            if (codigoUpper.length > 0) {
+                for (var k=0; k<items.length; k++) {
+                    if (items[k].txt.includes(codigoUpper)) {
                         items[k].cb.checked = true;
-                        items[k].cb.dispatchEvent(new Event('change', {{bubbles:true}}));
+                        items[k].cb.dispatchEvent(new Event('change', {bubbles:true}));
                         return 'ok_match:' + items[k].txt;
-                    }}
-                }}
-            }}
-
+                    }
+                }
+            }
             items[0].cb.checked = true;
-            items[0].cb.dispatchEvent(new Event('change', {{bubbles:true}}));
+            items[0].cb.dispatchEvent(new Event('change', {bubbles:true}));
             return 'ok_first:' + items[0].txt;
-        }}
+        }
         """, codigo)
         print(f"  Elemento seleccionado: {elemento_marcado}")
 
         await neo_page.evaluate("""
         () => {
-            var btns = Array.from(document.querySelectorAll('button'));
+            var btns = Array.from(document.querySelectorAll('button, a'));
             for (var i=0; i<btns.length; i++) {
                 if ((btns[i].innerText||'').trim() === 'Siguiente') { btns[i].click(); return 'ok'; }
             }
@@ -1719,7 +1715,7 @@ async def crear_aviso_cen(neo_page, datos):
             await riesgo_ta.fill("Trabajo sin riesgo para el sistema.")
         await neo_page.evaluate("""
         () => {
-            var btns = Array.from(document.querySelectorAll('button'));
+            var btns = Array.from(document.querySelectorAll('button, a'));
             for (var i=0; i<btns.length; i++) {
                 if ((btns[i].innerText||'').trim() === 'Siguiente') { btns[i].click(); return 'ok'; }
             }
@@ -1731,7 +1727,7 @@ async def crear_aviso_cen(neo_page, datos):
         # ── PASO 6: Consumo ───────────────────────────────────────────────────
         await neo_page.evaluate("""
         () => {
-            var all = Array.from(document.querySelectorAll('*'));
+            var all = Array.from(document.querySelectorAll('button, a, div, span, li'));
             for (var i=0; i<all.length; i++) {
                 var t = (all[i].innerText || all[i].textContent || '').trim();
                 if (t === 'No tiene consumo afectado') { all[i].click(); return 'ok'; }
@@ -1741,7 +1737,7 @@ async def crear_aviso_cen(neo_page, datos):
         await neo_page.wait_for_timeout(500)
         await neo_page.evaluate("""
         () => {
-            var btns = Array.from(document.querySelectorAll('button'));
+            var btns = Array.from(document.querySelectorAll('button, a'));
             for (var i=0; i<btns.length; i++) {
                 if ((btns[i].innerText||'').trim() === 'Siguiente') { btns[i].click(); return 'ok'; }
             }
@@ -1777,7 +1773,7 @@ async def crear_aviso_cen(neo_page, datos):
 
         await neo_page.evaluate("""
         () => {
-            var btns = Array.from(document.querySelectorAll('button'));
+            var btns = Array.from(document.querySelectorAll('button, a'));
             for (var i=0; i<btns.length; i++) {
                 if ((btns[i].innerText||'').trim() === 'Siguiente') { btns[i].click(); return 'ok'; }
             }
@@ -1789,7 +1785,7 @@ async def crear_aviso_cen(neo_page, datos):
         # ── PASO 8: Trabajo Afecta ────────────────────────────────────────────
         await neo_page.evaluate("""
         () => {
-            var btns = Array.from(document.querySelectorAll('button'));
+            var btns = Array.from(document.querySelectorAll('button, a'));
             for (var i=0; i<btns.length; i++) {
                 if ((btns[i].innerText||'').trim() === 'Siguiente') { btns[i].click(); return 'ok'; }
             }
@@ -1806,7 +1802,7 @@ async def crear_aviso_cen(neo_page, datos):
             )
         await neo_page.evaluate("""
         () => {
-            var btns = Array.from(document.querySelectorAll('button'));
+            var btns = Array.from(document.querySelectorAll('button, a'));
             for (var i=0; i<btns.length; i++) {
                 if ((btns[i].innerText||'').trim() === 'Siguiente') { btns[i].click(); return 'ok'; }
             }
@@ -1816,13 +1812,15 @@ async def crear_aviso_cen(neo_page, datos):
         await neo_page.wait_for_timeout(1500)
         await screenshot(neo_page, f"neo_07_fecha_{pt_id}")
 
-        # ── PASO 10: Fecha / Hora del Trabajo ─────────────────────────────────
+        # ── PASO 10: Fecha / Hora ─────────────────────────────────────────────
         await neo_page.evaluate("""
         () => {
-            var all = Array.from(document.querySelectorAll('*'));
+            var all = Array.from(document.querySelectorAll('button, a, div, span, li'));
             for (var i=0; i<all.length; i++) {
                 var t = (all[i].innerText || all[i].textContent || '').trim();
-                if (t === 'Ninguno de los antecedentes anteriores') { all[i].click(); return 'ok'; }
+                if (t === 'Ninguno de los antecedentes anteriores') {
+                    all[i].click(); return 'ok';
+                }
             }
         }
         """)
@@ -1834,40 +1832,29 @@ async def crear_aviso_cen(neo_page, datos):
                 "%m/%d/%Y %I:%M %p"
             )
             fecha_hora_inicio = dt_inicio.strftime("%d-%m-%Y %H:%M")
-            await neo_page.evaluate(f"""
-            (val) => {{
-                var inputs = Array.from(document.querySelectorAll('input'));
-                for (var i=0; i<inputs.length; i++) {{
-                    var inp = inputs[i];
-                    if (!inp.offsetParent) continue;
-                    var parent = inp.closest('div,td,tr');
-                    if (!parent) continue;
-                    var parentTxt = (parent.innerText || '').toLowerCase();
-                    if (parentTxt.includes('inicio') || parentTxt.includes('start')) {{
-                        inp.value = val;
-                        inp.dispatchEvent(new Event('input', {{bubbles:true}}));
-                        inp.dispatchEvent(new Event('change', {{bubbles:true}}));
-                        return 'ok:' + inp.id;
-                    }}
-                }}
-                for (var j=0; j<inputs.length; j++) {{
-                    if (inputs[j].offsetParent && inputs[j].type !== 'hidden') {{
-                        inputs[j].value = val;
-                        inputs[j].dispatchEvent(new Event('change', {{bubbles:true}}));
-                        return 'fallback:' + inputs[j].id;
-                    }}
-                }}
+            await neo_page.evaluate("""
+            (val) => {
+                var inputs = Array.from(document.querySelectorAll('input')).filter(
+                    function(i) { return i.offsetParent && i.type !== 'hidden'; }
+                );
+                if (inputs[0]) {
+                    inputs[0].value = val;
+                    inputs[0].dispatchEvent(new Event('input', {bubbles:true}));
+                    inputs[0].dispatchEvent(new Event('change', {bubbles:true}));
+                    return 'ok:' + inputs[0].id;
+                }
                 return 'not_found';
-            }}
+            }
             """, fecha_hora_inicio)
             print(f"  Fecha/hora inicio: {fecha_hora_inicio}")
-
             try:
                 await neo_page.evaluate("""
                 () => {
                     var btns = Array.from(document.querySelectorAll('button'));
                     for (var i=0; i<btns.length; i++) {
-                        if ((btns[i].innerText||'').trim() === 'Aplicar') { btns[i].click(); return 'ok'; }
+                        if ((btns[i].innerText||'').trim() === 'Aplicar') {
+                            btns[i].click(); return 'ok';
+                        }
                     }
                 }
                 """)
@@ -1881,41 +1868,29 @@ async def crear_aviso_cen(neo_page, datos):
                 "%m/%d/%Y %I:%M %p"
             )
             fecha_hora_fin = dt_fin.strftime("%d-%m-%Y %H:%M")
-            await neo_page.evaluate(f"""
-            (val) => {{
-                var inputs = Array.from(document.querySelectorAll('input'));
-                for (var i=0; i<inputs.length; i++) {{
-                    var inp = inputs[i];
-                    if (!inp.offsetParent) continue;
-                    var parent = inp.closest('div,td,tr');
-                    if (!parent) continue;
-                    var parentTxt = (parent.innerText || '').toLowerCase();
-                    if (parentTxt.includes('fin') || parentTxt.includes('término') || parentTxt.includes('termino')) {{
-                        inp.value = val;
-                        inp.dispatchEvent(new Event('input', {{bubbles:true}}));
-                        inp.dispatchEvent(new Event('change', {{bubbles:true}}));
-                        return 'ok:' + inp.id;
-                    }}
-                }}
-                var visibles = Array.from(document.querySelectorAll('input')).filter(function(i) {{
-                    return i.offsetParent && i.type !== 'hidden';
-                }});
-                if (visibles.length >= 2) {{
-                    visibles[1].value = val;
-                    visibles[1].dispatchEvent(new Event('change', {{bubbles:true}}));
-                    return 'fallback2:' + visibles[1].id;
-                }}
+            await neo_page.evaluate("""
+            (val) => {
+                var inputs = Array.from(document.querySelectorAll('input')).filter(
+                    function(i) { return i.offsetParent && i.type !== 'hidden'; }
+                );
+                if (inputs[1]) {
+                    inputs[1].value = val;
+                    inputs[1].dispatchEvent(new Event('input', {bubbles:true}));
+                    inputs[1].dispatchEvent(new Event('change', {bubbles:true}));
+                    return 'ok:' + inputs[1].id;
+                }
                 return 'not_found';
-            }}
+            }
             """, fecha_hora_fin)
             print(f"  Fecha/hora fin: {fecha_hora_fin}")
-
             try:
                 await neo_page.evaluate("""
                 () => {
                     var btns = Array.from(document.querySelectorAll('button'));
                     for (var i=0; i<btns.length; i++) {
-                        if ((btns[i].innerText||'').trim() === 'Aplicar') { btns[i].click(); return 'ok'; }
+                        if ((btns[i].innerText||'').trim() === 'Aplicar') {
+                            btns[i].click(); return 'ok';
+                        }
                     }
                 }
                 """)
@@ -1928,9 +1903,12 @@ async def crear_aviso_cen(neo_page, datos):
         # ── PASO 11: Crear y Enviar al Coordinador ────────────────────────────
         await neo_page.evaluate("""
         () => {
-            var btns = Array.from(document.querySelectorAll('button'));
+            var btns = Array.from(document.querySelectorAll('button, a'));
             for (var i=0; i<btns.length; i++) {
-                if ((btns[i].innerText||'').trim() === 'Crear y Enviar al Coordinador') { btns[i].click(); return 'ok'; }
+                var t = (btns[i].innerText || btns[i].textContent || '').trim();
+                if (t === 'Crear y Enviar al Coordinador') {
+                    btns[i].click(); return 'ok';
+                }
             }
         }
         """)
@@ -1938,9 +1916,11 @@ async def crear_aviso_cen(neo_page, datos):
 
         await neo_page.evaluate("""
         () => {
-            var btns = Array.from(document.querySelectorAll('button'));
+            var btns = Array.from(document.querySelectorAll('button, a'));
             for (var i=0; i<btns.length; i++) {
-                if ((btns[i].innerText||'').trim() === 'Aceptar') { btns[i].click(); return 'ok'; }
+                if ((btns[i].innerText||'').trim() === 'Aceptar') {
+                    btns[i].click(); return 'ok';
+                }
             }
         }
         """)
@@ -1958,8 +1938,8 @@ async def crear_aviso_cen(neo_page, datos):
                     var match = txt.match(/Número:\s*(\d+)/);
                     if (match) return match[1];
                 }
-                if (txt.includes('creada con exito')) {
-                    var match2 = txt.match(/(\d{10,})/);
+                if (txt.includes('creada con exito') || txt.includes('creada con éxito')) {
+                    var match2 = txt.match(/(\d{8,})/);
                     if (match2) return match2[1];
                 }
             }
@@ -1982,10 +1962,6 @@ async def crear_aviso_cen(neo_page, datos):
             pass
         return None
 
-
-# =============================================================================
-# CORREO
-# =============================================================================
 
 def enviar_reporte(pts_aprobados, pts_fallidos, pts_omitidos, error_critico=None):
     ahora_chile = datetime.now(TZ_CHILE)
