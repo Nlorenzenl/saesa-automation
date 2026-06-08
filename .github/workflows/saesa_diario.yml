@@ -1,5 +1,4 @@
 name: SAESA Diario
-
 on:
   schedule:
     # Lunes a viernes 08:00 AM Chile (UTC-4 invierno / UTC-3 verano)
@@ -7,11 +6,9 @@ on:
     # Usamos 11:00 UTC para cubrir horario de verano
     - cron: 0 20 * * 1-5
   workflow_dispatch:
-
 jobs:
   run-saesa:
     runs-on: ubuntu-latest
-
     steps:
       - name: Descargar repo
         uses: actions/checkout@v4
@@ -28,25 +25,16 @@ jobs:
           playwright install chromium
           playwright install-deps chromium
 
-      - name: Ejecutar automatización SAESA
-        run: python automatizacion_saesa.py
-        env:
-          NEOMANTE_USER: ${{ secrets.NEOMANTE_USER }}
-          NEOMANTE_PASS: ${{ secrets.NEOMANTE_PASS }}
-          OPAT_USER: ${{ secrets.OPAT_USER }}
-          OPAT_PASS: ${{ secrets.OPAT_PASS }}
-          SAESA_USER: ${{ secrets.SAESA_USER }}
-          SAESA_PASS: ${{ secrets.SAESA_PASS }}
-          GMAIL_USER: ${{ secrets.GMAIL_USER }}
-          GMAIL_APP_PASS: ${{ secrets.GMAIL_APP_PASS }}
-          EMAIL_DEST: ${{ secrets.EMAIL_DEST }}
-          DRY_RUN: "false"
-          MAX_APROBACIONES: "1"
-
-      - name: Subir capturas
-        uses: actions/upload-artifact@v4
-        if: always()          # siempre, no solo en fallo
-        with:
-          name: capturas-saesa-${{ github.run_id }}
-          path: capturas/
-          if-no-files-found: ignore    # no falla si no hay capturas
+      - name: Diagnóstico conectividad Centrality
+        run: |
+          echo "=== IP pública del runner ==="
+          curl -s https://api.ipify.org && echo ""
+          echo "=== Test TCP puerto 8091 ==="
+          timeout 15 bash -c 'cat < /dev/null > /dev/tcp/stx.saesa.cl/8091' \
+            && echo "PUERTO 8091: ABIERTO" \
+            || echo "PUERTO 8091: CERRADO O TIMEOUT"
+          echo "=== curl HTTPS a Centrality ==="
+          curl -v --max-time 30 --insecure \
+            "https://stx.saesa.cl:8091/backend/sts/login.php" \
+            -o /dev/null \
+            -w "HTTP_CODE:
