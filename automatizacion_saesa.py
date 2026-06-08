@@ -1562,21 +1562,40 @@ async def crear_aviso_cen(neo_page, datos):
         }
         """)
         print(f"  Select2 open: {r_s2_open}")
-        await neo_page.wait_for_timeout(500)
 
-        # Escribir en el input de búsqueda del Select2
+        # Esperar a que el input de búsqueda aparezca — Select2 lo renderiza en el <body>
+        try:
+            await neo_page.wait_for_selector(
+                '.select2-search__field, .select2-dropdown input',
+                state='visible',
+                timeout=5000
+            )
+            print("  Select2 input visible ✓")
+        except Exception:
+            print("  ADVERTENCIA: Select2 input no detectado, intentando igual")
+        await neo_page.wait_for_timeout(300)
+
+        # Escribir en el input — Select2 v4 lo renderiza fuera del contenedor, en el body
         r_s2_type = await neo_page.evaluate("""
         (buscar) => {
             var input = document.querySelector(
-                '.select2-search__field, .select2-search input, input.select2-input'
+                '.select2-dropdown .select2-search__field, '
+                + '.select2-search--dropdown .select2-search__field, '
+                + '.select2-container--open .select2-search__field, '
+                + 'input.select2-search__field'
             );
             if (input) {
+                input.focus();
                 input.value = buscar;
                 input.dispatchEvent(new Event('input', {bubbles:true}));
-                input.dispatchEvent(new KeyboardEvent('keyup', {bubbles:true}));
+                input.dispatchEvent(new KeyboardEvent('keyup', {bubbles:true, key: buscar.slice(-1)}));
                 return 'ok:' + input.className;
             }
-            return 'not_found';
+            // Diagnóstico: listar inputs visibles para debug
+            var todos = Array.from(document.querySelectorAll('input')).filter(
+                function(i) { return i.offsetParent; }
+            ).map(function(i) { return i.className + '|' + i.id; });
+            return 'not_found | inputs_visibles: ' + JSON.stringify(todos.slice(0, 8));
         }
         """, ssee_buscar)
         print(f"  Select2 type: {r_s2_type}")
@@ -1586,12 +1605,13 @@ async def crear_aviso_cen(neo_page, datos):
         r_s2_pick = await neo_page.evaluate("""
         (buscar) => {
             var opts = Array.from(document.querySelectorAll(
-                '.select2-results__option, .select2-result'
+                '.select2-results__option, .select2-result, '
+                + '.select2-dropdown li, .select2-results li'
             ));
             var buscarUpper = buscar.toUpperCase();
             for (var i=0; i<opts.length; i++) {
                 var t = (opts[i].innerText || opts[i].textContent || '').trim().toUpperCase();
-                if (t.includes(buscarUpper) && !t.includes('SELECCIONE')) {
+                if (t.includes(buscarUpper) && !t.includes('SELECCIONE') && !t.includes('SEARCHING')) {
                     opts[i].click();
                     return 'ok:' + (opts[i].innerText || '').trim();
                 }
