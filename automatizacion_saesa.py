@@ -1338,21 +1338,10 @@ async def hacer_login_neomante(neo_page):
     print(f"  tab Coordinado: {r_tab}")
     await neo_page.wait_for_timeout(2000)
     await screenshot(neo_page, "neomante_pre_fill")
-    debug_inputs = await neo_page.evaluate("""
-    () => {
-        return Array.from(document.querySelectorAll('input')).map(function(i) {
-            return {id: i.id, type: i.type, placeholder: i.placeholder, visible: !!i.offsetParent};
-        });
-    }
-    """)
-    print(f"  DEBUG inputs: {debug_inputs}")
-    print(f"  DEBUG usuario: '{NEOMANTE_USER}' len={len(NEOMANTE_USER)}")
-    print(f"  DEBUG pass len={len(NEOMANTE_PASS)}")
 
-    # ── Email (ID conocido: email_coordinado) ─────────────────────────────────
+    # ── Email — ID exacto confirmado: email_coordinado ────────────────────────
     r_email = await neo_page.evaluate("""
     (val) => {
-        // Usar ID exacto que vimos en el log anterior: email_coordinado
         var el = document.getElementById('email_coordinado');
         if (el) {
             el.value = val;
@@ -1360,38 +1349,33 @@ async def hacer_login_neomante(neo_page):
             el.dispatchEvent(new Event('change', {bubbles:true}));
             return 'ok_by_id:email_coordinado';
         }
-        // Fallback por tipo email
-        var inputs = Array.from(document.querySelectorAll('input[type="email"], input[placeholder="Email"]'));
-        for (var i=0; i<inputs.length; i++) {
-            inputs[i].value = val;
-            inputs[i].dispatchEvent(new Event('input', {bubbles:true}));
-            inputs[i].dispatchEvent(new Event('change', {bubbles:true}));
-            return 'ok_fallback:' + inputs[i].id;
-        }
         return 'not_found';
     }
     """, NEOMANTE_USER)
     print(f"  email fill: {r_email}")
     await neo_page.wait_for_timeout(300)
 
-    # ── Contraseña (ID conocido: password_centro_control) ─────────────────────
+    # ── Contraseña — ID exacto confirmado: password_coordinado ───────────────
+    # IMPORTANTE: NO usar password_centro_control (está oculto)
+    # El campo visible para Coordinado es password_coordinado
     r_pass = await neo_page.evaluate("""
     (val) => {
-        // ID visto en log anterior: password_centro_control
-        var el = document.getElementById('password_centro_control');
+        var el = document.getElementById('password_coordinado');
         if (el) {
             el.value = val;
             el.dispatchEvent(new Event('input', {bubbles:true}));
             el.dispatchEvent(new Event('change', {bubbles:true}));
-            return 'ok_by_id:password_centro_control';
+            return 'ok_by_id:password_coordinado';
         }
-        // Fallback
+        // Fallback: primer input password visible
         var inputs = Array.from(document.querySelectorAll('input[type="password"]'));
         for (var i=0; i<inputs.length; i++) {
-            inputs[i].value = val;
-            inputs[i].dispatchEvent(new Event('input', {bubbles:true}));
-            inputs[i].dispatchEvent(new Event('change', {bubbles:true}));
-            return 'ok_fallback:' + inputs[i].id;
+            if (inputs[i].offsetParent) {
+                inputs[i].value = val;
+                inputs[i].dispatchEvent(new Event('input', {bubbles:true}));
+                inputs[i].dispatchEvent(new Event('change', {bubbles:true}));
+                return 'ok_visible:' + inputs[i].id;
+            }
         }
         return 'not_found';
     }
@@ -1399,35 +1383,30 @@ async def hacer_login_neomante(neo_page):
     print(f"  pass fill: {r_pass}")
     await neo_page.wait_for_timeout(300)
 
-    # ── Click en Ingresar — usar el botón visible de la pestaña Coordinado ──────
-    # Hay 4 botones "Ingresar" (uno por pestaña). Clickear el que está visible.
-    r_ingresar = await neo_page.evaluate("""
+    # ── Click en Ingresar — botón visible del form Coordinado ─────────────────
+    r_btn = await neo_page.evaluate("""
     () => {
-        var btns = Array.from(document.querySelectorAll('button'));
-        for (var i=0; i<btns.length; i++) {
-            var btn = btns[i];
-            var t = (btn.innerText || '').trim();
-            if (t !== 'Ingresar') continue;
-            // Clickear el que esté visible (offsetParent != null)
-            if (btn.offsetParent) {
-                btn.click();
-                return 'ok:' + btn.id;
-            }
-        }
-        // Fallback: clickear por ID del formulario de Coordinado
-        // El email_coordinado nos indica que el form correcto es el de Coordinado
+        // Buscar el form que contiene email_coordinado
         var emailEl = document.getElementById('email_coordinado');
         if (emailEl) {
             var form = emailEl.closest('form');
             if (form) {
-                var submitBtn = form.querySelector('button[type="submit"]');
-                if (submitBtn) { submitBtn.click(); return 'ok_form:' + submitBtn.id; }
+                var btn = form.querySelector('button[type="submit"]');
+                if (btn) { btn.click(); return 'ok_form:' + btn.id; }
+            }
+        }
+        // Fallback: botón visible
+        var btns = Array.from(document.querySelectorAll('button'));
+        for (var i=0; i<btns.length; i++) {
+            if ((btns[i].innerText||'').trim()==='Ingresar' && btns[i].offsetParent) {
+                btns[i].click();
+                return 'ok_visible:' + btns[i].id;
             }
         }
         return 'not_found';
     }
     """)
-    print(f"  btn Ingresar: {r_ingresar}")
+    print(f"  btn Ingresar: {r_btn}")
     await neo_page.wait_for_load_state("networkidle", timeout=30_000)
     await neo_page.wait_for_timeout(2000)
     await screenshot(neo_page, "neomante_post_login")
