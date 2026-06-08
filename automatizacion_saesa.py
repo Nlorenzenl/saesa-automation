@@ -1338,6 +1338,14 @@ async def hacer_login_neomante(neo_page):
     print(f"  tab Coordinado: {r_tab}")
     await neo_page.wait_for_timeout(2000)
     await screenshot(neo_page, "neomante_pre_fill")
+    debug_inputs = await neo_page.evaluate("""
+    () => {
+        return Array.from(document.querySelectorAll('input')).map(function(i) {
+            return {id: i.id, type: i.type, placeholder: i.placeholder, visible: !!i.offsetParent};
+        });
+    }
+    """)
+    print(f"  DEBUG inputs: {debug_inputs}")
     print(f"  DEBUG usuario: '{NEOMANTE_USER}' len={len(NEOMANTE_USER)}")
     print(f"  DEBUG pass len={len(NEOMANTE_PASS)}")
 
