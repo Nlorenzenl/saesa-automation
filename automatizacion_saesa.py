@@ -1338,6 +1338,8 @@ async def hacer_login_neomante(neo_page):
     print(f"  tab Coordinado: {r_tab}")
     await neo_page.wait_for_timeout(2000)
     await screenshot(neo_page, "neomante_pre_fill")
+    print(f"  DEBUG usuario: '{NEOMANTE_USER}' len={len(NEOMANTE_USER)}")
+    print(f"  DEBUG pass len={len(NEOMANTE_PASS)}")
 
     # ── Email (ID conocido: email_coordinado) ─────────────────────────────────
     r_email = await neo_page.evaluate("""
