@@ -1553,6 +1553,31 @@ async def crear_aviso_cen(neo_page, datos):
         ssee_buscar = re.sub(r'^S/?E\s+', '', ssee_nombre, flags=re.IGNORECASE).strip()
         print(f"  Subestación a buscar: '{ssee_buscar}' (raw: '{ssee_raw}')")
 
+        # Paso previo: clickear radio "Todas las subestaciones" (id=todas)
+        # para que el Select2 cargue todas las opciones disponibles
+        r_radio = await neo_page.evaluate("""
+        () => {
+            // Radio buttons: propietario=Mis subestaciones, todas=Todas las subestaciones
+            var radio = document.getElementById('todas');
+            if (radio) {
+                radio.click();
+                return 'ok:radio_todas';
+            }
+            // Fallback: buscar por label
+            var labels = Array.from(document.querySelectorAll('label'));
+            for (var i=0; i<labels.length; i++) {
+                var t = (labels[i].innerText || '').trim();
+                if (t === 'Todas las subestaciones') {
+                    labels[i].click();
+                    return 'ok:label_todas';
+                }
+            }
+            return 'not_found';
+        }
+        """)
+        print(f"  Radio todas: {r_radio}")
+        await neo_page.wait_for_timeout(1000)
+
         # Abrir el Select2 clickeando su contenedor
         r_s2_open = await neo_page.evaluate("""
         () => {
