@@ -1488,7 +1488,26 @@ async def hacer_login_neomante(neo_page):
         await neo_page.wait_for_load_state("networkidle", timeout=20_000)
         await neo_page.wait_for_timeout(2000)
         await screenshot(neo_page, "neomante_post_switch")
-        print("  OK: switch a SOCIEDAD TRANSMISORA METROPOLITANA S.A.")
+
+        # Verificar que el switch fue exitoso
+        empresa_actual = await neo_page.evaluate("""
+        () => {
+            // Buscar el nombre de empresa en el header
+            var header = document.querySelector('nav, header, .navbar, #main-header');
+            if (header) return (header.innerText || '').substring(0, 100);
+            // Fallback: buscar en todo el documento
+            var body = document.body;
+            var txt = (body ? body.innerText : '').substring(0, 200);
+            return txt;
+        }
+        """)
+        print(f"  empresa actual (primeros 100 chars): {empresa_actual[:100] if empresa_actual else 'N/A'}")
+
+        if empresa_actual and 'METROPOLITANA' in empresa_actual.upper() and 'II' not in empresa_actual.upper()[:empresa_actual.upper().find('METROPOLITANA')+20]:
+            print("  OK: switch a SOCIEDAD TRANSMISORA METROPOLITANA S.A.")
+        else:
+            print("  ADVERTENCIA: switch puede no haber funcionado, continuando de todas formas")
+
     except Exception as e:
         print(f"  ADVERTENCIA switch: {e}")
 
@@ -1511,30 +1530,85 @@ async def crear_aviso_cen(neo_page, datos):
         await neo_page.wait_for_timeout(2000)
 
         # Click en Desconexión/Intervención → Subestación
-        await neo_page.click('text="Subestación"', timeout=TIMEOUT)
+        await neo_page.evaluate("""
+        () => {
+            var all = Array.from(document.querySelectorAll('*'));
+            for (var i=0; i<all.length; i++) {
+                var t = (all[i].innerText || all[i].textContent || '').trim();
+                if (t === 'Subestación') { all[i].click(); return 'ok'; }
+            }
+        }
+        """)
         await neo_page.wait_for_load_state("networkidle", timeout=20_000)
         await neo_page.wait_for_timeout(1500)
         await screenshot(neo_page, f"neo_01_tipo_{pt_id}")
 
-        # ── PASO 1: Tipo de Solicitud ──────────────────────────────────────────
+        # ── PASO 1: Tipo de Solicitud — usar JS para clicks robustos ─────────────
         tipo_solicitud = datos.get("tipo_trabajo", "DESCONEXIÓN")
-        if "INTERV" in tipo_solicitud.upper():
-            await neo_page.click('text="Intervención"', timeout=10_000)
-        else:
-            await neo_page.click('text="Desconexión"', timeout=10_000)
-        await neo_page.wait_for_timeout(500)
+        es_intervencion = "INTERV" in tipo_solicitud.upper()
         print(f"  Tipo solicitud: {tipo_solicitud}")
 
+        r_tipo = await neo_page.evaluate(f"""
+        (esIntervencion) => {{
+            var btns = Array.from(document.querySelectorAll('button, a, div'));
+            var clicked = false;
+            for (var i=0; i<btns.length; i++) {{
+                var t = (btns[i].innerText || btns[i].textContent || '').trim();
+                if (esIntervencion && t === 'Intervención') {{
+                    btns[i].click(); clicked = true;
+                    return 'ok:Intervención';
+                }}
+                if (!esIntervencion && t === 'Desconexión') {{
+                    btns[i].click(); clicked = true;
+                    return 'ok:Desconexión';
+                }}
+            }}
+            return 'not_found';
+        }}
+        """, es_intervencion)
+        print(f"  click tipo: {r_tipo}")
+        await neo_page.wait_for_timeout(800)
+
         # Origen Interno
-        await neo_page.click('text="Origen Interno"', timeout=10_000)
+        r_origen = await neo_page.evaluate("""
+        () => {
+            var btns = Array.from(document.querySelectorAll('button, a, div'));
+            for (var i=0; i<btns.length; i++) {
+                var t = (btns[i].innerText || '').trim();
+                if (t === 'Origen Interno') { btns[i].click(); return 'ok'; }
+            }
+            return 'not_found';
+        }
+        """)
+        print(f"  Origen Interno: {r_origen}")
         await neo_page.wait_for_timeout(500)
 
         # Programada
-        await neo_page.click('text="Programada"', timeout=10_000)
+        r_prog = await neo_page.evaluate("""
+        () => {
+            var btns = Array.from(document.querySelectorAll('button, a, div'));
+            for (var i=0; i<btns.length; i++) {
+                var t = (btns[i].innerText || '').trim();
+                if (t === 'Programada') { btns[i].click(); return 'ok'; }
+            }
+            return 'not_found';
+        }
+        """)
+        print(f"  Programada: {r_prog}")
         await neo_page.wait_for_timeout(500)
 
         # Siguiente
-        await neo_page.click('button:has-text("Siguiente")', timeout=10_000)
+        r_sig = await neo_page.evaluate("""
+        () => {
+            var btns = Array.from(document.querySelectorAll('button'));
+            for (var i=0; i<btns.length; i++) {
+                var t = (btns[i].innerText || '').trim();
+                if (t === 'Siguiente') { btns[i].click(); return 'ok'; }
+            }
+            return 'not_found';
+        }
+        """)
+        print(f"  Siguiente paso 1: {r_sig}")
         await neo_page.wait_for_load_state("networkidle", timeout=20_000)
         await neo_page.wait_for_timeout(1500)
         await screenshot(neo_page, f"neo_02_subestacion_{pt_id}")
@@ -1591,7 +1665,14 @@ async def crear_aviso_cen(neo_page, datos):
             }
             """)
 
-        await neo_page.click('button:has-text("Siguiente")', timeout=10_000)
+        await neo_page.evaluate("""
+        () => {
+            var btns = Array.from(document.querySelectorAll('button'));
+            for (var i=0; i<btns.length; i++) {
+                if ((btns[i].innerText||'').trim() === 'Siguiente') { btns[i].click(); return 'ok'; }
+            }
+        }
+        """)
         await neo_page.wait_for_load_state("networkidle", timeout=20_000)
         await neo_page.wait_for_timeout(1500)
         await screenshot(neo_page, f"neo_03_trabajo_sobre_{pt_id}")
@@ -1602,10 +1683,42 @@ async def crear_aviso_cen(neo_page, datos):
         trabajo_sobre = determinar_trabajo_sobre(instalacion, detalle)
         print(f"  Trabajo sobre: {trabajo_sobre} (instalacion='{instalacion}', detalle='{detalle}')")
 
-        await neo_page.click(f'text="{trabajo_sobre}"', timeout=10_000)
+        r_tsobre = await neo_page.evaluate(f"""
+        (trabajo) => {{
+            var all = Array.from(document.querySelectorAll('*'));
+            for (var i=0; i<all.length; i++) {{
+                var t = (all[i].innerText || all[i].textContent || '').trim();
+                if (t === trabajo && all[i].children.length === 0) {{
+                    all[i].click();
+                    return 'ok:' + all[i].tagName;
+                }}
+            }}
+            // Fallback: buscar radio button con ese label
+            var labels = Array.from(document.querySelectorAll('label'));
+            for (var j=0; j<labels.length; j++) {{
+                if ((labels[j].innerText||'').trim() === trabajo) {{
+                    labels[j].click();
+                    return 'ok_label:' + labels[j].htmlFor;
+                }}
+            }}
+            return 'not_found';
+        }}
+        """, trabajo_sobre)
+        print(f"  click trabajo sobre: {r_tsobre}")
         await neo_page.wait_for_timeout(500)
 
-        await neo_page.click('button:has-text("Siguiente")', timeout=10_000)
+        r_sig3 = await neo_page.evaluate("""
+        () => {
+            var btns = Array.from(document.querySelectorAll('button'));
+            for (var i=0; i<btns.length; i++) {
+                if ((btns[i].innerText||'').trim() === 'Siguiente') {
+                    btns[i].click(); return 'ok';
+                }
+            }
+            return 'not_found';
+        }
+        """)
+        print(f"  Siguiente paso 3: {r_sig3}")
         await neo_page.wait_for_load_state("networkidle", timeout=20_000)
         await neo_page.wait_for_timeout(1500)
         await screenshot(neo_page, f"neo_04_elementos_{pt_id}")
@@ -1665,7 +1778,14 @@ async def crear_aviso_cen(neo_page, datos):
         """, codigo)
         print(f"  Elemento seleccionado: {elemento_marcado}")
 
-        await neo_page.click('button:has-text("Siguiente")', timeout=10_000)
+        await neo_page.evaluate("""
+        () => {
+            var btns = Array.from(document.querySelectorAll('button'));
+            for (var i=0; i<btns.length; i++) {
+                if ((btns[i].innerText||'').trim() === 'Siguiente') { btns[i].click(); return 'ok'; }
+            }
+        }
+        """)
         await neo_page.wait_for_load_state("networkidle", timeout=20_000)
         await neo_page.wait_for_timeout(1500)
         await screenshot(neo_page, f"neo_05_riesgo_{pt_id}")
@@ -1674,14 +1794,36 @@ async def crear_aviso_cen(neo_page, datos):
         riesgo_ta = await neo_page.query_selector('textarea')
         if riesgo_ta:
             await riesgo_ta.fill("Trabajo sin riesgo para el sistema.")
-        await neo_page.click('button:has-text("Siguiente")', timeout=10_000)
+        await neo_page.evaluate("""
+        () => {
+            var btns = Array.from(document.querySelectorAll('button'));
+            for (var i=0; i<btns.length; i++) {
+                if ((btns[i].innerText||'').trim() === 'Siguiente') { btns[i].click(); return 'ok'; }
+            }
+        }
+        """)
         await neo_page.wait_for_load_state("networkidle", timeout=20_000)
         await neo_page.wait_for_timeout(1000)
 
         # ── PASO 6: Consumo → "No tiene consumo afectado" ─────────────────────
-        await neo_page.click('text="No tiene consumo afectado"', timeout=10_000)
+        await neo_page.evaluate("""
+        () => {
+            var all = Array.from(document.querySelectorAll('*'));
+            for (var i=0; i<all.length; i++) {
+                var t = (all[i].innerText || all[i].textContent || '').trim();
+                if (t === 'No tiene consumo afectado') { all[i].click(); return 'ok'; }
+            }
+        }
+        """)
         await neo_page.wait_for_timeout(500)
-        await neo_page.click('button:has-text("Siguiente")', timeout=10_000)
+        await neo_page.evaluate("""
+        () => {
+            var btns = Array.from(document.querySelectorAll('button'));
+            for (var i=0; i<btns.length; i++) {
+                if ((btns[i].innerText||'').trim() === 'Siguiente') { btns[i].click(); return 'ok'; }
+            }
+        }
+        """)
         await neo_page.wait_for_load_state("networkidle", timeout=20_000)
         await neo_page.wait_for_timeout(1000)
         await screenshot(neo_page, f"neo_06_tipo_trabajo_{pt_id}")
@@ -1712,12 +1854,26 @@ async def crear_aviso_cen(neo_page, datos):
         if len(textareas) >= 1:
             await textareas[0].fill(desc[:500])  # limitar a 500 chars
 
-        await neo_page.click('button:has-text("Siguiente")', timeout=10_000)
+        await neo_page.evaluate("""
+        () => {
+            var btns = Array.from(document.querySelectorAll('button'));
+            for (var i=0; i<btns.length; i++) {
+                if ((btns[i].innerText||'').trim() === 'Siguiente') { btns[i].click(); return 'ok'; }
+            }
+        }
+        """)
         await neo_page.wait_for_load_state("networkidle", timeout=20_000)
         await neo_page.wait_for_timeout(1000)
 
         # ── PASO 8: Trabajo Afecta → solo Siguiente ───────────────────────────
-        await neo_page.click('button:has-text("Siguiente")', timeout=10_000)
+        await neo_page.evaluate("""
+        () => {
+            var btns = Array.from(document.querySelectorAll('button'));
+            for (var i=0; i<btns.length; i++) {
+                if ((btns[i].innerText||'').trim() === 'Siguiente') { btns[i].click(); return 'ok'; }
+            }
+        }
+        """)
         await neo_page.wait_for_load_state("networkidle", timeout=20_000)
         await neo_page.wait_for_timeout(1000)
 
@@ -1727,14 +1883,29 @@ async def crear_aviso_cen(neo_page, datos):
             await textarea_comentario.fill(
                 "Trabajos enmarcados en el plan de mantenimiento anual de STM"
             )
-        await neo_page.click('button:has-text("Siguiente")', timeout=10_000)
+        await neo_page.evaluate("""
+        () => {
+            var btns = Array.from(document.querySelectorAll('button'));
+            for (var i=0; i<btns.length; i++) {
+                if ((btns[i].innerText||'').trim() === 'Siguiente') { btns[i].click(); return 'ok'; }
+            }
+        }
+        """)
         await neo_page.wait_for_load_state("networkidle", timeout=20_000)
         await neo_page.wait_for_timeout(1500)
         await screenshot(neo_page, f"neo_07_fecha_{pt_id}")
 
         # ── PASO 10: Fecha / Hora del Trabajo ─────────────────────────────────
         # Seleccionar "Ninguno de los antecedentes anteriores"
-        await neo_page.click('text="Ninguno de los antecedentes anteriores"', timeout=10_000)
+        await neo_page.evaluate("""
+        () => {
+            var all = Array.from(document.querySelectorAll('*'));
+            for (var i=0; i<all.length; i++) {
+                var t = (all[i].innerText || all[i].textContent || '').trim();
+                if (t === 'Ninguno de los antecedentes anteriores') { all[i].click(); return 'ok'; }
+            }
+        }
+        """)
         await neo_page.wait_for_timeout(500)
 
         # Llenar fecha y hora de inicio
@@ -1777,7 +1948,14 @@ async def crear_aviso_cen(neo_page, datos):
 
             # Aplicar con el calendario
             try:
-                await neo_page.click('button:has-text("Aplicar")', timeout=5000)
+                await neo_page.evaluate("""
+                () => {
+                    var btns = Array.from(document.querySelectorAll('button'));
+                    for (var i=0; i<btns.length; i++) {
+                        if ((btns[i].innerText||'').trim() === 'Aplicar') { btns[i].click(); return 'ok'; }
+                    }
+                }
+                """)
                 await neo_page.wait_for_timeout(500)
             except Exception:
                 pass
@@ -1820,7 +1998,14 @@ async def crear_aviso_cen(neo_page, datos):
             print(f"  Fecha/hora fin: {fecha_hora_fin}")
 
             try:
-                await neo_page.click('button:has-text("Aplicar")', timeout=5000)
+                await neo_page.evaluate("""
+                () => {
+                    var btns = Array.from(document.querySelectorAll('button'));
+                    for (var i=0; i<btns.length; i++) {
+                        if ((btns[i].innerText||'').trim() === 'Aplicar') { btns[i].click(); return 'ok'; }
+                    }
+                }
+                """)
                 await neo_page.wait_for_timeout(500)
             except Exception:
                 pass
@@ -1828,11 +2013,25 @@ async def crear_aviso_cen(neo_page, datos):
         await screenshot(neo_page, f"neo_08_pre_enviar_{pt_id}")
 
         # ── PASO 11: Crear y Enviar al Coordinador ────────────────────────────
-        await neo_page.click('button:has-text("Crear y Enviar al Coordinador")', timeout=10_000)
+        await neo_page.evaluate("""
+        () => {
+            var btns = Array.from(document.querySelectorAll('button'));
+            for (var i=0; i<btns.length; i++) {
+                if ((btns[i].innerText||'').trim() === 'Crear y Enviar al Coordinador') { btns[i].click(); return 'ok'; }
+            }
+        }
+        """)
         await neo_page.wait_for_timeout(1500)
 
         # Confirmar popup "¿Está seguro de enviar la Solicitud?"
-        await neo_page.click('button:has-text("Aceptar")', timeout=10_000)
+        await neo_page.evaluate("""
+        () => {
+            var btns = Array.from(document.querySelectorAll('button'));
+            for (var i=0; i<btns.length; i++) {
+                if ((btns[i].innerText||'').trim() === 'Aceptar') { btns[i].click(); return 'ok'; }
+            }
+        }
+        """)
         await neo_page.wait_for_load_state("networkidle", timeout=30_000)
         await neo_page.wait_for_timeout(2000)
         await screenshot(neo_page, f"neo_09_resultado_{pt_id}")
