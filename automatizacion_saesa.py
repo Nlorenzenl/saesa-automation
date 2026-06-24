@@ -38,7 +38,8 @@ MAX_APROBACIONES = int(os.environ.get("MAX_APROBACIONES", "50"))
 TIMEOUT   = 30_000
 TZ_CHILE  = ZoneInfo("America/Santiago")
 
-ESTADO_EXACTO = "Revisión y Autorización PCCT"
+ESTADO_EXACTO    = "Revisión y Autorización PCCT"
+ESTADO_EXACTO_FP = "Revisión y Autorización PCCT - FP"
 AREA_KEYWORDS = ["metropolitana"]
 
 
@@ -360,8 +361,10 @@ async def navegar_a_permisos(page):
 # FILTRO PCCT
 # =============================================================================
 
-async def aplicar_filtro_pcct(page, frame):
-    print("\n[3] FILTRO")
+async def aplicar_filtro_pcct(page, frame, estado_texto=None):
+    if estado_texto is None:
+        estado_texto = ESTADO_EXACTO
+    print(f"\n[3] FILTRO — {estado_texto}")
     await frame.click('text=Filtro')
     await page.wait_for_timeout(2000)
 
@@ -394,12 +397,14 @@ async def aplicar_filtro_pcct(page, frame):
     await page.wait_for_timeout(1500)
 
     r_pcct = await frame.evaluate("""
-    () => {
+    (buscar) => {
         const items = Array.from(document.querySelectorAll(".x-combo-list-item"))
             .filter(el => el.offsetParent);
         for (const item of items) {
             const raw = (item.innerText || "").trim();
-            if (raw.indexOf("PCCT") >= 0 && raw.indexOf("FP") < 0 && raw.indexOf("JACCT") < 0) {
+            // Limpiar prefijos de árbol para comparar
+            const limpio = raw.replace(/^[\u2500\u2502\u2514\u251c\u2007\\s\\-]+/, '').trim();
+            if (limpio === buscar) {
                 item.scrollIntoView({block: "center"});
                 var e1 = new MouseEvent("mousedown", {bubbles:true, cancelable:true});
                 var e2 = new MouseEvent("mouseup",   {bubbles:true, cancelable:true});
@@ -412,10 +417,10 @@ async def aplicar_filtro_pcct(page, frame):
         }
         return {ok:false};
     }
-    """)
-    print(f"  selección PCCT: {r_pcct}")
+    """, estado_texto)
+    print(f"  selección estado: {r_pcct}")
     if not r_pcct.get("ok"):
-        raise RuntimeError(f"No se pudo seleccionar Estado PCCT: {r_pcct}")
+        raise RuntimeError(f"No se pudo seleccionar Estado {estado_texto!r}: {r_pcct}")
 
     await page.wait_for_timeout(1000)
 
@@ -445,6 +450,49 @@ async def aplicar_filtro_pcct(page, frame):
     }
     """)
     print(f"  resultado filtro: {info}")
+
+
+# =============================================================================
+# LIMPIAR FILTRO PCCT
+# =============================================================================
+
+async def limpiar_filtro_pcct(page, frame):
+    """Abre el panel de filtros y limpia el campo Estado, luego aplica."""
+    print("\n[FILTRO] Limpiando filtro Estado...")
+    await frame.click('text=Filtro')
+    await page.wait_for_timeout(2000)
+
+    r = await frame.evaluate("""
+    () => {
+        const win = Array.from(document.querySelectorAll(".x-window"))
+            .filter(w => w.offsetParent && (w.innerText || "").includes("Filtros"))[0];
+        if (!win) return {ok:false, msg:"No encontré ventana Filtros"};
+        // Buscar el botón limpiar dentro de la ventana
+        const btns = Array.from(win.querySelectorAll("button, a, .x-btn"));
+        for (const b of btns) {
+            const t = (b.innerText || b.textContent || "").trim();
+            if (t === "Limpiar") { b.click(); return {ok:true, via:"Limpiar"}; }
+        }
+        return {ok:false, msg:"Botón Limpiar no encontrado"};
+    }
+    """)
+    print(f"  limpiar: {r}")
+    await page.wait_for_timeout(2000)
+
+    # Tras limpiar, cerrar el panel sin aplicar (para no traer todo)
+    r_close = await frame.evaluate("""
+    () => {
+        const wins = Array.from(document.querySelectorAll(".x-window"))
+            .filter(w => w.offsetParent && (w.innerText || "").includes("Filtros"));
+        if (wins.length > 0) {
+            const close = wins[0].querySelector(".x-tool-close");
+            if (close) { close.click(); return "closed"; }
+        }
+        return "not_found";
+    }
+    """)
+    print(f"  cerrar panel filtro: {r_close}")
+    await page.wait_for_timeout(1500)
 
 
 # =============================================================================
@@ -960,8 +1008,8 @@ async def subir_pt_a_opat(opat_page, datos):
 # APROBAR PTS EN CENTRALITY Y SUBIR A OPAT
 # =============================================================================
 
-async def aprobar_pts(page, frame, opat_page, neo_page):
-    print("\n[4] APROBANDO PTs y subiendo a OPAT")
+async def aprobar_pts(page, frame, opat_page, neo_page, tipo_flujo="PCCT"):
+    print(f"\n[4] APROBANDO PTs ({tipo_flujo}) y subiendo a OPAT")
     print(f"  DRY_RUN: {DRY_RUN}")
 
     pts_aprobados = []
@@ -1021,7 +1069,7 @@ async def aprobar_pts(page, frame, opat_page, neo_page):
                     pts_aprobados.append({
                         "id": pt["id"], "area": pt["area"],
                         "estado": pt["estado"], "opat": False, "opat_dry": True,
-                        "cen": None
+                        "cen": None, "tipo_flujo": tipo_flujo
                     })
                     continue
 
@@ -1159,6 +1207,7 @@ async def aprobar_pts(page, frame, opat_page, neo_page):
                     "estado":    pt["estado"],
                     "opat":      opat_ok,
                     "cen":       numero_cen,
+                    "tipo_flujo": tipo_flujo,
                 })
 
             except Exception as e:
@@ -1993,27 +2042,31 @@ def enviar_reporte(pts_aprobados, pts_fallidos, pts_omitidos, error_critico=None
     hora        = ahora_chile.strftime("%H:%M")
     hora_ampm   = ahora_chile.strftime("%I:%M %p").lower()
 
-    def filas_aprobados():
-        if not pts_aprobados:
+    # Separar por tipo de flujo
+    pcct_aprobados = [pt for pt in pts_aprobados if pt.get("tipo_flujo", "PCCT") == "PCCT"]
+    fp_aprobados   = [pt for pt in pts_aprobados if pt.get("tipo_flujo") == "FP"]
+    pcct_fallidos  = [pt for pt in pts_fallidos  if " [FP]" not in pt]
+    fp_fallidos    = [pt for pt in pts_fallidos  if " [FP]" in pt]
+
+    def filas_pts(lista):
+        if not lista:
             return "<tr><td colspan='5' style='padding:6px 12px;color:#999'>Ninguno</td></tr>"
         html = ""
-        for pt in pts_aprobados:
+        for pt in lista:
             opat_dry = pt.get("opat_dry", False)
             if opat_dry:
-                opat_icon = "<span style='color:#888'>— (simulado)</span>"
+                opat_icon = "<span style='color:#888'>&#8212; (simulado)</span>"
             elif pt.get("opat"):
                 opat_icon = "<span style='color:#006600;font-size:16px'>&#10003;</span>"
             else:
                 opat_icon = "<span style='color:#cc0000;font-size:16px'>&#10007;</span>"
-
             cen = pt.get("cen")
             if opat_dry:
-                cen_cell = "<span style='color:#888'>— (simulado)</span>"
+                cen_cell = "<span style='color:#888'>&#8212; (simulado)</span>"
             elif cen:
                 cen_cell = f"<span style='font-family:monospace;color:#006600;font-weight:bold'>{cen}</span>"
             else:
                 cen_cell = "<span style='color:#cc0000;font-size:12px'>No se pudo realizar aviso al CEN,<br>realizarlo manualmente</span>"
-
             html += (
                 "<tr>"
                 "<td style='padding:4px 8px;color:#006600;font-size:16px'>&#10003;</td>"
@@ -2025,22 +2078,22 @@ def enviar_reporte(pts_aprobados, pts_fallidos, pts_omitidos, error_critico=None
             )
         return html
 
-    def filas_fallidos():
-        if not pts_fallidos:
+    def filas_fallidos_lista(lista):
+        if not lista:
             return "<tr><td colspan='2' style='padding:6px 12px;color:#999'>Sin errores</td></tr>"
         return "".join(
             "<tr>"
             "<td style='padding:4px 8px;color:#cc0000;font-size:16px'>&#10007;</td>"
             f"<td style='padding:4px 12px;font-size:13px'>{pt}</td>"
             "</tr>"
-            for pt in pts_fallidos
+            for pt in lista
         )
 
-    def filas_omitidos():
-        if not pts_omitidos:
+    def filas_omitidos_lista(lista):
+        if not lista:
             return "<tr><td colspan='4' style='padding:6px 12px;color:#999'>Ninguno</td></tr>"
         html = ""
-        for pt in pts_omitidos:
+        for pt in lista:
             html += (
                 "<tr>"
                 "<td style='padding:4px 8px;color:#aaa'>&mdash;</td>"
@@ -2051,6 +2104,23 @@ def enviar_reporte(pts_aprobados, pts_fallidos, pts_omitidos, error_critico=None
             )
         return html
 
+    def tabla_aprobados(lista, titulo, color_titulo):
+        opat_ok = sum(1 for pt in lista if pt.get("opat"))
+        cen_ok  = sum(1 for pt in lista if pt.get("cen"))
+        return (
+            f"<h3 style='color:{color_titulo};margin:20px 0 8px'>{titulo} ({len(lista)})"
+            f" &nbsp;<span style='font-size:13px;color:#555'>— OPAT: {opat_ok} &nbsp;|&nbsp; Avisos CEN: {cen_ok}</span></h3>"
+            "<table style='border-collapse:collapse;width:100%'>"
+            "<tr style='background:#f6f6f6'>"
+            "<th style='padding:6px 8px'>&#10003;</th>"
+            "<th style='padding:6px 12px;text-align:left'>PT</th>"
+            "<th style='padding:6px 12px;text-align:left'>Área de cobertura</th>"
+            "<th style='padding:6px 12px;text-align:center'>OPAT</th>"
+            "<th style='padding:6px 12px;text-align:center'>Aviso CEN</th>"
+            "</tr>"
+            f"{filas_pts(lista)}</table>"
+        )
+
     error_bloque = ""
     if error_critico:
         error_bloque = (
@@ -2060,42 +2130,35 @@ def enviar_reporte(pts_aprobados, pts_fallidos, pts_omitidos, error_critico=None
             "</div>"
         )
 
-    opat_ok_count = sum(1 for pt in pts_aprobados if pt.get("opat"))
-    cen_ok_count  = sum(1 for pt in pts_aprobados if pt.get("cen"))
+    total_aprobados = len(pts_aprobados)
+    total_fp        = len(fp_aprobados)
+    total_fallidos  = len(pts_fallidos)
+    total_omitidos  = len(pts_omitidos)
+
+    pcct_omitidos = [pt for pt in pts_omitidos if pt.get("tipo_flujo", "PCCT") == "PCCT"]
+    fp_omitidos   = [pt for pt in pts_omitidos if pt.get("tipo_flujo") == "FP"]
 
     html = (
         "<html><body style='font-family:Arial,sans-serif;max-width:760px;margin:auto;color:#222'>"
         "<div style='background:#003580;color:white;padding:24px;border-radius:8px 8px 0 0'>"
-        "<h2 style='margin:0;font-size:20px'>Reporte PT's &mdash; Centrality / DMS</h2>"
+        "<h2 style='margin:0;font-size:20px'>Reporte PT&rsquo;s &mdash; Centrality / DMS</h2>"
         "<p style='margin:6px 0 0;opacity:.8;font-size:14px'>"
-        "Aprobación PCCT &middot; Zonal Metropolitana</p>"
+        "Aprobación PCCT y PCCT-FP &middot; Zonal Metropolitana</p>"
         "</div>"
         "<div style='border:1px solid #ddd;border-top:none;padding:20px 24px;border-radius:0 0 8px 8px'>"
         f"<p><strong>Fecha:</strong> {fecha} {hora}</p>"
-        "<p><strong>Criterio:</strong> Estado = Revisión y Autorización PCCT"
-        " | Área de cobertura contiene Metropolitana</p>"  # ← mensaje actualizado
+        "<p><strong>Criterio:</strong> Estado = Rev. y Aut. PCCT / PCCT-FP | Área de cobertura contiene Metropolitana</p>"
         + error_bloque
-        + f"<h3 style='color:#006600;margin:20px 0 8px'>"
-        f"PTs Aprobados ({len(pts_aprobados)}) &nbsp;"
-        f"<span style='font-size:13px;color:#555'>— OPAT: {opat_ok_count} &nbsp;|&nbsp; Avisos CEN: {cen_ok_count}</span></h3>"
-        "<table style='border-collapse:collapse;width:100%'>"
-        "<tr style='background:#f6f6f6'>"
-        "<th style='padding:6px 8px'>✓</th>"
-        "<th style='padding:6px 12px;text-align:left'>PT</th>"
-        "<th style='padding:6px 12px;text-align:left'>Área de cobertura</th>"  # ← header actualizado
-        "<th style='padding:6px 12px;text-align:center'>OPAT</th>"
-        "<th style='padding:6px 12px;text-align:center'>Aviso CEN</th>"
-        "</tr>"
-        f"{filas_aprobados()}</table>"
-        f"<p style='font-size:12px;color:#888;margin-top:6px'>"
-        f"&#10003; = subido a OPAT &nbsp;&nbsp; &#10007; = error al subir</p>"
-        f"<h3 style='color:#cc0000;margin:20px 0 8px'>PTs con Error ({len(pts_fallidos)})</h3>"
-        f"<table style='border-collapse:collapse;width:100%'>{filas_fallidos()}</table>"
-        f"<h3 style='color:#888;margin:20px 0 8px'>PTs Omitidos ({len(pts_omitidos)})</h3>"
-        "<table style='border-collapse:collapse;width:100%'>"
-        "<tr style='background:#f6f6f6'><th></th><th>PT</th><th>Área de cobertura</th><th>Motivo</th></tr>"  # ← header actualizado
-        f"{filas_omitidos()}</table>"
-        "</div></body></html>"
+        + tabla_aprobados(pcct_aprobados, "&#10003; PTs Aprobados — PCCT (normal)", "#006600")
+        + tabla_aprobados(fp_aprobados,   "&#9201; PTs Aprobados — PCCT Fuera de Plazo", "#cc6600")
+        + f"<p style='font-size:12px;color:#888;margin-top:6px'>&#10003; = subido a OPAT &nbsp;&nbsp; &#10007; = error al subir</p>"
+        + f"<h3 style='color:#cc0000;margin:20px 0 8px'>PTs con Error ({total_fallidos})</h3>"
+        + f"<table style='border-collapse:collapse;width:100%'>{filas_fallidos_lista(pts_fallidos)}</table>"
+        + f"<h3 style='color:#888;margin:20px 0 8px'>PTs Omitidos ({total_omitidos})</h3>"
+        + "<table style='border-collapse:collapse;width:100%'>"
+        + "<tr style='background:#f6f6f6'><th></th><th>PT</th><th>Área de cobertura</th><th>Motivo</th></tr>"
+        + filas_omitidos_lista(pts_omitidos)
+        + "</table></div></body></html>"
     )
 
     if error_critico:
@@ -2103,11 +2166,10 @@ def enviar_reporte(pts_aprobados, pts_fallidos, pts_omitidos, error_critico=None
     else:
         asunto = (
             f"[Reporte PTS Centrality] {fecha} {hora_ampm}"
-            f" | {len(pts_aprobados)} aprobados"
-            f" | {opat_ok_count} en OPAT"
-            f" | {cen_ok_count} avisos CEN"
-            f" | {len(pts_fallidos)} errores"
-            f" | {len(pts_omitidos)} omitidos"
+            f" | PCCT: {len(pcct_aprobados)} aprobados"
+            f" | FP: {total_fp} aprobados"
+            f" | {total_fallidos} errores"
+            f" | {total_omitidos} omitidos"
         )
 
     todos = [EMAIL_DEST] + EMAIL_CC
@@ -2126,10 +2188,6 @@ def enviar_reporte(pts_aprobados, pts_fallidos, pts_omitidos, error_critico=None
     except Exception as e:
         print(f"  Error enviando correo: {e}")
 
-
-# =============================================================================
-# MAIN
-# =============================================================================
 
 async def main():
     sep = "=" * 65
@@ -2179,10 +2237,26 @@ async def main():
             )
 
             frame = await navegar_a_permisos(page_centrality)
-            await aplicar_filtro_pcct(page_centrality, frame)
+
+            # ── PASADA 1: Revisión y Autorización PCCT (normal) ──────────────
+            await aplicar_filtro_pcct(page_centrality, frame, ESTADO_EXACTO)
             pts_aprobados, pts_fallidos, pts_omitidos = await aprobar_pts(
-                page_centrality, frame, page_opat, page_neomante
+                page_centrality, frame, page_opat, page_neomante, tipo_flujo="PCCT"
             )
+
+            # ── PASADA 2: Revisión y Autorización PCCT - FP (fuera de plazo) ─
+            print("\n" + "="*65)
+            print("  PASADA 2: PCCT - FP (Fuera de Plazo)")
+            print("="*65)
+            await limpiar_filtro_pcct(page_centrality, frame)
+            await aplicar_filtro_pcct(page_centrality, frame, ESTADO_EXACTO_FP)
+            pts_aprobados_fp, pts_fallidos_fp, pts_omitidos_fp = await aprobar_pts(
+                page_centrality, frame, page_opat, page_neomante, tipo_flujo="FP"
+            )
+            # Consolidar resultados
+            pts_aprobados.extend(pts_aprobados_fp)
+            pts_fallidos.extend(pts_fallidos_fp)
+            pts_omitidos.extend(pts_omitidos_fp)
 
         except Exception as e:
             error_critico = str(e)
