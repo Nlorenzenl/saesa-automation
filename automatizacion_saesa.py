@@ -15,7 +15,7 @@ from playwright.async_api import async_playwright
 # =============================================================================
 
 SAESA_URL = "https://stx.saesa.cl:8091/backend/sts/login.php?backurl=%2Fbackend%2Fsts%2Fcentrality.php"
-OPAT_URL  = "https://opat.cl/agendaopat/"
+OPAT_URL  = "https://www.opat.cl/agendaC/"  # ← CAMBIADO: antes era https://opat.cl/agendaopat/
 
 SAESA_USER = os.environ["SAESA_USER"]
 SAESA_PASS = os.environ["SAESA_PASS"]
@@ -229,23 +229,33 @@ def es_estado_pcct_exacto(estado):
 
 
 def extraer_info_fila(row):
-    id_pt = area_pt = estado_pt = ""
-    for cell in row:
-        c = normalizar(cell)
-        if re.match(r"^\d{4}-\d{5}$", c):
-            id_pt = c
-            continue
-        if "Revisión y Autorización" in c or "Revision y Autorizacion" in c:
-            estado_pt = c
-            continue
-        posibles_areas = [
-            "metropolitana", "osorno", "antofagasta", "chiloe", "chiloé",
-            "copiapo", "copiapó", "llvv", "scada", "temuco", "puerto montt",
-            "transemel", "protecciones", "proyectos", "mayor zonal",
-            "zonal", "mantenimiento",
-        ]
-        if any(k in c.lower() for k in posibles_areas) and not area_pt:
-            area_pt = c
+    """
+    Columnas Centrality (índice fijo):
+      0 = Id              → regex YYYY-NNNNN
+      1 = Fecha de inicio
+      2 = Área
+      3 = Área de cobertura  ← usamos ESTA para filtrar Metropolitana
+      4 = Estado
+      5 = Tipo de permiso de trabajo
+      6 = Descripción del trabajo general
+
+    CAMBIO: antes se filtraba por la columna "Área" (índice 2) buscando keywords.
+    Ahora se usa directamente "Área de cobertura" (índice 3) para mayor precisión,
+    evitando falsos positivos cuando Área y Área de cobertura no coinciden.
+    """
+    id_pt     = normalizar(row[0]) if len(row) > 0 else ""
+    area_pt   = normalizar(row[3]) if len(row) > 3 else ""   # Área de cobertura
+    estado_pt = normalizar(row[4]) if len(row) > 4 else ""   # Estado
+
+    # Validar formato del ID; si el índice 0 no coincide, buscar en toda la fila
+    if not re.match(r"^\d{4}-\d{5}$", id_pt):
+        id_pt = ""
+        for cell in row:
+            c = normalizar(cell)
+            if re.match(r"^\d{4}-\d{5}$", c):
+                id_pt = c
+                break
+
     return id_pt, area_pt, estado_pt
 
 
@@ -600,7 +610,7 @@ async def subir_pt_a_opat(opat_page, datos):
     print(f"\n[OPAT] Subiendo PT {pt_id}...")
 
     try:
-        if "agendaopat" not in opat_page.url:
+        if "agendaC" not in opat_page.url:  # ← actualizado para nueva URL
             for intento in range(3):
                 try:
                     await opat_page.goto(OPAT_URL, wait_until="domcontentloaded", timeout=120_000)
@@ -987,9 +997,9 @@ async def aprobar_pts(page, frame, opat_page, neo_page):
                 pts_omitidos.append({
                     "id": id_pt,
                     "area": area_pt or "Sin área",
-                    "motivo": "Área no Metropolitana"
+                    "motivo": "Área de cobertura no Metropolitana"  # ← mensaje actualizado
                 })
-                print(f"    [OMITIR AREA] {id_pt} | {area_pt}")
+                print(f"    [OMITIR AREA COB.] {id_pt} | {area_pt}")
 
         for pt in pts_esta_pagina:
             if len(pts_aprobados) >= MAX_APROBACIONES:
@@ -1311,12 +1321,9 @@ async def hacer_login_neomante(neo_page):
 
     # =========================================================================
     # SWITCH A SOCIEDAD TRANSMISORA METROPOLITANA S.A.
-    # FIX: clickear el <a class="dropdown-toggle"> dentro de li.user-empresa
-    #      NO el <b> ni el texto interno — Bootstrap 3 escucha el toggle
     # =========================================================================
     print("  Haciendo switch a SOCIEDAD TRANSMISORA METROPOLITANA S.A...")
     try:
-        # ── DIAGNÓSTICO: leer aria-expanded antes del click ───────────────────
         aria_antes = await neo_page.evaluate("""
         () => {
             var toggle = document.querySelector('li.user-empresa a.dropdown-toggle');
@@ -1327,16 +1334,13 @@ async def hacer_login_neomante(neo_page):
         """)
         print(f"  [DIAG] toggle antes del click: {aria_antes}")
 
-        # ── CLICK en el dropdown-toggle correcto ──────────────────────────────
         r_switch_menu = await neo_page.evaluate("""
         () => {
-            // Selector preciso: <a class="dropdown-toggle"> dentro de li.user-empresa
             var toggle = document.querySelector('li.user-empresa a.dropdown-toggle');
             if (toggle) {
                 toggle.click();
                 return 'ok:a.dropdown-toggle en li.user-empresa';
             }
-            // Fallback 1: cualquier a.dropdown-toggle que contenga el texto
             var toggles = Array.from(document.querySelectorAll('a.dropdown-toggle'));
             for (var i=0; i<toggles.length; i++) {
                 var t = (toggles[i].innerText || '').trim();
@@ -1345,7 +1349,6 @@ async def hacer_login_neomante(neo_page):
                     return 'ok_fallback1:' + t.substring(0, 50);
                 }
             }
-            // Fallback 2: dispatchEvent manual sobre el <a> dentro del li
             var li = document.querySelector('li.user-empresa');
             if (li) {
                 var a = li.querySelector('a');
@@ -1359,7 +1362,6 @@ async def hacer_login_neomante(neo_page):
         """)
         print(f"  switch menu click: {r_switch_menu}")
 
-        # ── DIAGNÓSTICO: leer aria-expanded después del click ─────────────────
         await neo_page.wait_for_timeout(600)
         aria_despues = await neo_page.evaluate("""
         () => {
@@ -1374,7 +1376,6 @@ async def hacer_login_neomante(neo_page):
         """)
         print(f"  [DIAG] toggle después del click: {aria_despues}")
 
-        # ── Esperar que el dropdown-menu sea visible ──────────────────────────
         try:
             await neo_page.wait_for_selector(
                 'li.user-empresa ul.dropdown-menu',
@@ -1388,16 +1389,11 @@ async def hacer_login_neomante(neo_page):
         await neo_page.wait_for_timeout(500)
         await screenshot(neo_page, "neomante_switch_menu")
 
-        # ── Hacer click en SOCIEDAD TRANSMISORA METROPOLITANA S.A. ───────────
-        # Buscar DENTRO del dropdown-menu de user-empresa para mayor precisión
         r_switch = await neo_page.evaluate("""
         () => {
-            // Buscar en el scope del dropdown-menu de user-empresa
             var menu = document.querySelector('li.user-empresa ul.dropdown-menu');
             var scope = menu || document;
             var items = Array.from(scope.querySelectorAll('a, li'));
-
-            // Primera pasada: coincidencia exacta
             for (var i=0; i<items.length; i++) {
                 var t = (items[i].innerText || items[i].textContent || '').trim();
                 if (t === 'Switch como SOCIEDAD TRANSMISORA METROPOLITANA S.A.') {
@@ -1405,7 +1401,6 @@ async def hacer_login_neomante(neo_page):
                     return 'ok_exact:' + t;
                 }
             }
-            // Segunda pasada: contiene TRANSMISORA METROPOLITANA pero no variantes
             for (var j=0; j<items.length; j++) {
                 var t2 = (items[j].innerText || items[j].textContent || '').trim();
                 if (t2.includes('TRANSMISORA METROPOLITANA') &&
@@ -1417,7 +1412,6 @@ async def hacer_login_neomante(neo_page):
                     return 'ok_filtered:' + t2.substring(0, 70);
                 }
             }
-            // Diagnóstico: listar opciones disponibles en el dropdown
             var opciones = items.map(function(el) {
                 return (el.innerText || el.textContent || '').trim();
             }).filter(function(t) { return t.length > 3; });
@@ -1430,16 +1424,13 @@ async def hacer_login_neomante(neo_page):
         await neo_page.wait_for_timeout(2000)
         await screenshot(neo_page, "neomante_post_switch")
 
-        # ── DIAGNÓSTICO: verificar empresa activa en el header ────────────────
         empresa_actual = await neo_page.evaluate("""
         () => {
-            // Leer el texto del toggle para ver qué empresa quedó activa
             var toggle = document.querySelector('li.user-empresa a.dropdown-toggle');
             if (toggle) {
                 var b = toggle.querySelector('b');
                 return b ? (b.innerText || '').trim() : (toggle.innerText || '').trim();
             }
-            // Fallback: leer el navbar completo
             var nav = document.querySelector('nav, header, .navbar, .main-header');
             return nav ? (nav.innerText || '').substring(0, 150) : 'nav_not_found';
         }
@@ -1460,11 +1451,6 @@ async def hacer_login_neomante(neo_page):
 # =============================================================================
 
 async def crear_aviso_cen(neo_page, datos):
-    """
-    Crea el aviso al CEN en Neomante con los datos del PT.
-    Devuelve el número de aviso o None si falló.
-    URL directa al wizard STM — hash fijo del módulo Desconexión/Intervención de STM.
-    """
     pt_id = datos["id"]
     print(f"\n[NEOMANTE] Creando aviso CEN para PT {pt_id}...")
 
@@ -1472,7 +1458,6 @@ async def crear_aviso_cen(neo_page, datos):
 
     try:
         # ── PASO 1: Tipo de Solicitud ─────────────────────────────────────────
-        # Ir directo al wizard de STM — evita ambigüedad del botón Subestación
         await neo_page.goto(NEO_WIZARD_BASE, wait_until="domcontentloaded", timeout=60_000)
         await neo_page.wait_for_timeout(2000)
         await screenshot(neo_page, f"neo_01_tipo_{pt_id}")
@@ -1481,7 +1466,6 @@ async def crear_aviso_cen(neo_page, datos):
         es_intervencion = "INTERV" in tipo_solicitud.upper()
         print(f"  Tipo solicitud: {tipo_solicitud}")
 
-        # Tiles del wizard: pueden ser <button>, <a>, <div>, <span>, <li>
         r_tipo = await neo_page.evaluate("""
         (esIntervencion) => {
             var target = esIntervencion ? 'Intervención' : 'Desconexión';
@@ -1547,13 +1531,11 @@ async def crear_aviso_cen(neo_page, datos):
         await screenshot(neo_page, f"neo_02_subestacion_{pt_id}")
 
         # ── PASO 2: Subestación — Select2 ─────────────────────────────────────
-        # "LA PINTANA (Subestación)" → buscar "LA PINTANA"
         ssee_raw    = datos.get("se_linea", "")
         ssee_nombre = re.sub(r'\s*\(.*?\)', '', ssee_raw).strip()
         ssee_buscar = re.sub(r'^S/?E\s+', '', ssee_nombre, flags=re.IGNORECASE).strip()
         print(f"  Subestación a buscar: '{ssee_buscar}' (raw: '{ssee_raw}')")
 
-        # Paso 1: clickear radio "Todas las subestaciones"
         r_radio = await neo_page.evaluate("""
         () => {
             var radio = document.getElementById('todas');
@@ -1568,15 +1550,12 @@ async def crear_aviso_cen(neo_page, datos):
         }
         """)
         print(f"  Radio todas: {r_radio}")
-        # Esperar a que el Select2 se actualice tras el cambio de radio
         await neo_page.wait_for_timeout(1500)
 
-        # Paso 2: clickear el Select2 usando Playwright (más confiable que JS)
         try:
             await neo_page.click('.select2-selection', timeout=5000)
             print("  Select2 click: ok (Playwright)")
         except Exception:
-            # Fallback JS
             await neo_page.evaluate("""
             () => {
                 var s = document.querySelector('.select2-container, .select2-selection');
@@ -1586,7 +1565,6 @@ async def crear_aviso_cen(neo_page, datos):
             print("  Select2 click: fallback JS")
         await neo_page.wait_for_timeout(800)
 
-        # Paso 3: esperar el input de búsqueda y escribir con Playwright
         try:
             await neo_page.wait_for_selector(
                 '.select2-search__field',
@@ -1611,7 +1589,6 @@ async def crear_aviso_cen(neo_page, datos):
             """, ssee_buscar)
         await neo_page.wait_for_timeout(1200)
 
-        # Paso 4: clickear la primera opción que coincide
         try:
             await neo_page.wait_for_selector(
                 '.select2-results__option',
@@ -1628,7 +1605,6 @@ async def crear_aviso_cen(neo_page, datos):
                 + '.select2-dropdown li, .select2-results li'
             ));
             var buscarUpper = buscar.toUpperCase();
-            // Primera pasada: coincidencia parcial con el nombre buscado
             for (var i=0; i<opts.length; i++) {
                 var t = (opts[i].innerText || opts[i].textContent || '').trim().toUpperCase();
                 if (t.includes(buscarUpper) && !t.includes('SELECCIONE') && !t.includes('SEARCHING')) {
@@ -1636,7 +1612,6 @@ async def crear_aviso_cen(neo_page, datos):
                     return 'ok:' + (opts[i].innerText || '').trim();
                 }
             }
-            // Fallback: primera opción no placeholder
             for (var j=0; j<opts.length; j++) {
                 var t2 = (opts[j].innerText || opts[j].textContent || '').trim();
                 if (t2 && t2 !== 'Seleccione...' && t2 !== 'Searching...') {
@@ -1644,7 +1619,6 @@ async def crear_aviso_cen(neo_page, datos):
                     return 'ok_first:' + t2;
                 }
             }
-            // Diagnóstico
             var textos = opts.map(function(o) {
                 return (o.innerText || o.textContent || '').trim();
             }).slice(0, 5);
@@ -1658,8 +1632,7 @@ async def crear_aviso_cen(neo_page, datos):
         () => {
             var btns = Array.from(document.querySelectorAll('button, a'));
             for (var i=0; i<btns.length; i++) {
-                var t = (btns[i].innerText || btns[i].textContent || '').trim();
-                if (t === 'Siguiente') { btns[i].click(); return 'ok'; }
+                if ((btns[i].innerText||'').trim() === 'Siguiente') { btns[i].click(); return 'ok'; }
             }
         }
         """)
@@ -1979,11 +1952,11 @@ async def crear_aviso_cen(neo_page, datos):
             for (var i=0; i<els.length; i++) {
                 var txt = (els[i].innerText || '').trim();
                 if (txt.includes('Solicitud creada') && txt.includes('Número:')) {
-                    var match = txt.match(/Número:\s*(\d+)/);
+                    var match = txt.match(/Número:[\\s]*(\\d+)/);
                     if (match) return match[1];
                 }
                 if (txt.includes('creada con exito') || txt.includes('creada con éxito')) {
-                    var match2 = txt.match(/(\d{8,})/);
+                    var match2 = txt.match(/(\\d{8,})/);
                     if (match2) return match2[1];
                 }
             }
@@ -2093,7 +2066,7 @@ def enviar_reporte(pts_aprobados, pts_fallidos, pts_omitidos, error_critico=None
         "<div style='border:1px solid #ddd;border-top:none;padding:20px 24px;border-radius:0 0 8px 8px'>"
         f"<p><strong>Fecha:</strong> {fecha} {hora}</p>"
         "<p><strong>Criterio:</strong> Estado = Revisión y Autorización PCCT"
-        " | Área contiene Metropolitana</p>"
+        " | Área de cobertura contiene Metropolitana</p>"  # ← mensaje actualizado
         + error_bloque
         + f"<h3 style='color:#006600;margin:20px 0 8px'>"
         f"PTs Aprobados ({len(pts_aprobados)}) &nbsp;"
@@ -2102,7 +2075,7 @@ def enviar_reporte(pts_aprobados, pts_fallidos, pts_omitidos, error_critico=None
         "<tr style='background:#f6f6f6'>"
         "<th style='padding:6px 8px'>✓</th>"
         "<th style='padding:6px 12px;text-align:left'>PT</th>"
-        "<th style='padding:6px 12px;text-align:left'>Área</th>"
+        "<th style='padding:6px 12px;text-align:left'>Área de cobertura</th>"  # ← header actualizado
         "<th style='padding:6px 12px;text-align:center'>OPAT</th>"
         "<th style='padding:6px 12px;text-align:center'>Aviso CEN</th>"
         "</tr>"
@@ -2113,7 +2086,7 @@ def enviar_reporte(pts_aprobados, pts_fallidos, pts_omitidos, error_critico=None
         f"<table style='border-collapse:collapse;width:100%'>{filas_fallidos()}</table>"
         f"<h3 style='color:#888;margin:20px 0 8px'>PTs Omitidos ({len(pts_omitidos)})</h3>"
         "<table style='border-collapse:collapse;width:100%'>"
-        "<tr style='background:#f6f6f6'><th></th><th>PT</th><th>Área</th><th>Motivo</th></tr>"
+        "<tr style='background:#f6f6f6'><th></th><th>PT</th><th>Área de cobertura</th><th>Motivo</th></tr>"  # ← header actualizado
         f"{filas_omitidos()}</table>"
         "</div></body></html>"
     )
