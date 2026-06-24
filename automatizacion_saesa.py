@@ -225,7 +225,14 @@ def es_metropolitana(area):
 
 
 def es_estado_pcct_exacto(estado):
-    return normalizar(estado) == ESTADO_EXACTO
+    # La celda puede traer prefijos de árbol como "│  └─" antes del texto real,
+    # así que buscamos el texto exacto dentro del valor en vez de comparar igual.
+    return ESTADO_EXACTO in normalizar(estado)
+
+
+def limpiar_celda(txt):
+    """Elimina prefijos de árbol ExtJS: │ └─ ├─ y espacios especiales antes del texto."""
+    return re.sub(r'^[\u2500\u2502\u2514\u251c\u2007\s\-]+', '', normalizar(txt)).strip()
 
 
 def extraer_info_fila(row):
@@ -244,8 +251,8 @@ def extraer_info_fila(row):
     evitando falsos positivos cuando Área y Área de cobertura no coinciden.
     """
     id_pt     = normalizar(row[0]) if len(row) > 0 else ""
-    area_pt   = normalizar(row[3]) if len(row) > 3 else ""   # Área de cobertura
-    estado_pt = normalizar(row[4]) if len(row) > 4 else ""   # Estado
+    area_pt   = limpiar_celda(row[3]) if len(row) > 3 else ""   # Área de cobertura
+    estado_pt = limpiar_celda(row[4]) if len(row) > 4 else ""   # Estado
 
     # Validar formato del ID; si el índice 0 no coincide, buscar en toda la fila
     if not re.match(r"^\d{4}-\d{5}$", id_pt):
