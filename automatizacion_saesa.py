@@ -237,31 +237,28 @@ def limpiar_celda(txt):
 
 def extraer_info_fila(row):
     """
-    Columnas Centrality (índice fijo):
-      0 = Id              → regex YYYY-NNNNN
-      1 = Fecha de inicio
-      2 = Área
-      3 = Área de cobertura  ← usamos ESTA para filtrar Metropolitana
-      4 = Estado
-      5 = Tipo de permiso de trabajo
-      6 = Descripción del trabajo general
+    La grilla Centrality tiene columnas ocultas al inicio. Según DIAG real:
+      [0]=''  [1]=''  [2]=id_interno  [3]=Id(YYYY-NNNNN)  [4]=''  [5]=''
+      [6]=Fecha inicio  [7]=Area  [8]=Area de cobertura  [9]=Estado
 
-    CAMBIO: antes se filtraba por la columna "Área" (índice 2) buscando keywords.
-    Ahora se usa directamente "Área de cobertura" (índice 3) para mayor precisión,
-    evitando falsos positivos cuando Área y Área de cobertura no coinciden.
+    Buscamos el Id por regex (robusto ante variaciones de columnas ocultas),
+    luego calculamos Área de cobertura y Estado como offset relativo al Id.
     """
-    id_pt     = normalizar(row[0]) if len(row) > 0 else ""
-    area_pt   = limpiar_celda(row[3]) if len(row) > 3 else ""   # Área de cobertura
-    estado_pt = limpiar_celda(row[4]) if len(row) > 4 else ""   # Estado
+    id_pt  = ""
+    id_idx = -1
+    for i, cell in enumerate(row):
+        c = normalizar(cell)
+        if re.match(r"^\d{4}-\d{5}$", c):
+            id_pt  = c
+            id_idx = i
+            break
 
-    # Validar formato del ID; si el índice 0 no coincide, buscar en toda la fila
-    if not re.match(r"^\d{4}-\d{5}$", id_pt):
-        id_pt = ""
-        for cell in row:
-            c = normalizar(cell)
-            if re.match(r"^\d{4}-\d{5}$", c):
-                id_pt = c
-                break
+    if id_idx < 0:
+        return "", "", ""
+
+    # id_idx=3, Area de cobertura=id_idx+5=8, Estado=id_idx+6=9
+    area_pt   = limpiar_celda(row[id_idx + 5]) if len(row) > id_idx + 5 else ""
+    estado_pt = limpiar_celda(row[id_idx + 6]) if len(row) > id_idx + 6 else ""
 
     return id_pt, area_pt, estado_pt
 
