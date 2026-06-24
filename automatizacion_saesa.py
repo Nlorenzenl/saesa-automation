@@ -986,7 +986,10 @@ async def aprobar_pts(page, frame, opat_page, neo_page):
         for row in filas:
             if not row:
                 continue
+            # DIAG: ver fila raw completa para detectar desfase de índices
+            print(f"    [DIAG] raw={[repr(c[:30]) for c in row]}")
             id_pt, area_pt, estado_pt = extraer_info_fila(row)
+            print(f"    [DIAG] id={repr(id_pt)} | area={repr(area_pt)} | estado={repr(estado_pt)} | pcct={es_estado_pcct_exacto(estado_pt)}")
             if not id_pt:
                 continue
             if not es_estado_pcct_exacto(estado_pt):
