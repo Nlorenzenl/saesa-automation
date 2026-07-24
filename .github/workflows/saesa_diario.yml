@@ -52,7 +52,7 @@ jobs:
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASS: ${{ secrets.GMAIL_APP_PASS }}
           EMAIL_DEST: ${{ secrets.EMAIL_DEST }}
-          DRY_RUN: "false"
+          DRY_RUN: "true"
           MAX_APROBACIONES: "50"
 
       - name: Subir capturas
