@@ -52,8 +52,8 @@ jobs:
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASS: ${{ secrets.GMAIL_APP_PASS }}
           EMAIL_DEST: ${{ secrets.EMAIL_DEST }}
-          DRY_RUN: "true"
-          MAX_APROBACIONES: "50"
+          DRY_RUN: "false"
+          MAX_APROBACIONES: "300"
 
       - name: Subir capturas
         uses: actions/upload-artifact@v4
