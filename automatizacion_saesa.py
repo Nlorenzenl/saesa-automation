@@ -40,6 +40,7 @@ TZ_CHILE  = ZoneInfo("America/Santiago")
 
 ESTADO_EXACTO    = "Revisión y Autorización PCCT"
 ESTADO_EXACTO_FP = "Revisión y Autorización PCCT - FP"
+ESTADO_ESPERANDO_ACTIVACION = "Esperando activación"
 AREA_KEYWORDS = ["metropolitana"]
 
 
@@ -361,12 +362,52 @@ async def navegar_a_permisos(page):
 # FILTRO PCCT
 # =============================================================================
 
-async def aplicar_filtro_pcct(page, frame, estado_texto=None):
+async def aplicar_filtro_pcct(page, frame, estado_texto=None, limpiar_primero=False, desmarcar_bandeja=False):
     if estado_texto is None:
         estado_texto = ESTADO_EXACTO
     print(f"\n[3] FILTRO — {estado_texto}")
     await frame.click('text=Filtro')
     await page.wait_for_timeout(2000)
+
+    if limpiar_primero:
+        r_limpiar = await frame.evaluate("""
+        () => {
+            const win = Array.from(document.querySelectorAll(".x-window"))
+                .filter(w => w.offsetParent && (w.innerText || "").includes("Filtros"))[0];
+            if (!win) return {ok:false, msg:"No encontré ventana Filtros"};
+            const btns = Array.from(win.querySelectorAll("button, a, .x-btn"));
+            for (const b of btns) {
+                const t = (b.innerText || b.textContent || "").trim();
+                if (t === "Limpiar") { b.click(); return {ok:true}; }
+            }
+            return {ok:false, msg:"Botón Limpiar no encontrado"};
+        }
+        """)
+        print(f"  limpiar previo: {r_limpiar}")
+        await page.wait_for_timeout(1500)
+
+    if desmarcar_bandeja:
+        r_checkbox = await frame.evaluate("""
+        () => {
+            const win = Array.from(document.querySelectorAll(".x-window"))
+                .filter(w => w.offsetParent && (w.innerText || "").includes("Filtros"))[0];
+            if (!win) return {ok:false, msg:"No encontré ventana Filtros"};
+            const labels = Array.from(win.querySelectorAll("label,td,div,span"))
+                .filter(el => el.offsetParent);
+            let target = null;
+            for (const el of labels) {
+                if ((el.innerText || "").trim().indexOf("En bandeja de trabajo") === 0) { target = el; break; }
+            }
+            if (!target) return {ok:false, msg:"No encontré label 'En bandeja de trabajo'"};
+            const tr = target.closest("tr") || win;
+            const cb = tr.querySelector('input[type="checkbox"]');
+            if (!cb) return {ok:false, msg:"No encontré checkbox"};
+            if (cb.checked) { cb.click(); }
+            return {ok:true, checked: cb.checked};
+        }
+        """)
+        print(f"  desmarcar 'En bandeja de trabajo': {r_checkbox}")
+        await page.wait_for_timeout(800)
 
     r_estado = await frame.evaluate("""
     () => {
@@ -594,6 +635,81 @@ async def hacer_login_opat(opat_page):
     await opat_page.wait_for_timeout(2000)
     await screenshot(opat_page, "opat_post_login")
     print("  OK: sesión OPAT iniciada")
+
+
+# =============================================================================
+# VERIFICAR EXISTENCIA DE UN PT EN LA AGENDA OPAT
+# =============================================================================
+
+async def existe_pt_en_opat(opat_page, pt_id):
+    """
+    Usa el campo 'Buscar' de la Agenda OPAT (placeholder 'Ej: Polpaico...') para
+    verificar si un PT ya fue agregado. Retorna True/False, o None si no se pudo
+    determinar (en cuyo caso el llamador decide cómo proceder).
+    """
+    try:
+        await cerrar_modal_opat(opat_page)
+
+        if "agendac" not in opat_page.url.lower():
+            for intento in range(3):
+                try:
+                    await opat_page.goto(OPAT_URL, wait_until="domcontentloaded", timeout=120_000)
+                    break
+                except Exception as e:
+                    print(f"    OPAT goto (buscar) intento {intento+1} falló: {e}")
+                    if intento == 2:
+                        raise
+                    await opat_page.wait_for_timeout(5000)
+            await opat_page.wait_for_timeout(2000)
+
+        buscar_input = await opat_page.query_selector('input[placeholder*="Polpaico"]')
+        if not buscar_input:
+            buscar_input = await opat_page.query_selector('input[type="text"]')
+        if not buscar_input:
+            print("    ADVERTENCIA: no se encontró el campo 'Buscar' en OPAT")
+            return None
+
+        await buscar_input.click()
+        await buscar_input.fill("")
+        await buscar_input.fill(pt_id)
+        await buscar_input.dispatch_event("input")
+        await opat_page.wait_for_timeout(1200)
+        try:
+            await buscar_input.press("Enter")
+        except Exception:
+            pass
+        await opat_page.wait_for_timeout(1500)
+
+        info = await opat_page.evaluate("""
+        () => {
+            var els = Array.from(document.querySelectorAll('*'));
+            for (var i=0; i<els.length; i++) {
+                var el = els[i];
+                if (el.children.length !== 0) continue;
+                var t = (el.innerText || '').trim();
+                var m = t.match(/^Mostrando\\s+(\\d+)\\s+de\\s+(\\d+)\\s+PT$/i);
+                if (m) return {mostrados: parseInt(m[1]), total: parseInt(m[2])};
+            }
+            return null;
+        }
+        """)
+        print(f"    OPAT búsqueda '{pt_id}': {info}")
+
+        # limpiar el buscador para dejar la página lista para el próximo uso
+        try:
+            await buscar_input.fill("")
+            await buscar_input.press("Enter")
+            await opat_page.wait_for_timeout(500)
+        except Exception:
+            pass
+
+        if info is None:
+            return None
+        return info.get("mostrados", 0) > 0
+
+    except Exception as e:
+        print(f"    ERROR verificando existencia en OPAT ({pt_id}): {e}")
+        return None
 
 
 # =============================================================================
@@ -1227,6 +1343,115 @@ async def aprobar_pts(page, frame, opat_page, neo_page, tipo_flujo="PCCT"):
 
     await screenshot(page, "final")
     return pts_aprobados, pts_fallidos, pts_omitidos
+
+
+# =============================================================================
+# PROCESAR PTs "ESPERANDO ACTIVACIÓN" (NO METROPOLITANA) → SOLO OPAT
+# =============================================================================
+
+async def procesar_esperando_activacion(page, frame, opat_page):
+    """
+    A diferencia de aprobar_pts, este flujo NO aprueba nada en Centrality.
+    Recorre la grilla ya filtrada por 'Esperando activación' (sin filtro de
+    bandeja de trabajo), omite todo lo que sea Área Zonal Metropolitana, y
+    para el resto verifica si el PT ya existe en la agenda OPAT: si existe se
+    omite, si no existe se lee el detalle y se sube a OPAT como PT nuevo.
+    """
+    print(f"\n[4-EA] Procesando PTs en '{ESTADO_ESPERANDO_ACTIVACION}' (excluye Metropolitana → solo OPAT)")
+    print(f"  DRY_RUN: {DRY_RUN}")
+
+    pts_agregados = []
+    pts_fallidos  = []
+    pts_omitidos  = []
+
+    total_paginas = await frame.evaluate(JS_GET_TOTAL_PAGES)
+    paginas = min(total_paginas, 20)
+    print(f"  Total páginas: {total_paginas}")
+
+    for pagina in range(1, paginas + 1):
+        print(f"\n  ── Página {pagina}/{paginas} ──")
+        await page.wait_for_timeout(1500)
+
+        filas = await frame.evaluate(JS_READ_ROWS)
+        print(f"  Filas leídas: {len(filas)}")
+
+        pts_esta_pagina = []
+        for row in filas:
+            if not row:
+                continue
+            id_pt, area_pt, estado_pt = extraer_info_fila(row)
+            if not id_pt:
+                continue
+            if es_metropolitana(area_pt):
+                pts_omitidos.append({
+                    "id": id_pt,
+                    "area": area_pt or "Sin área",
+                    "motivo": "Área Zonal Metropolitana"
+                })
+                print(f"    [OMITIR METROPOLITANA] {id_pt} | {area_pt}")
+                continue
+            pts_esta_pagina.append({"id": id_pt, "area": area_pt, "estado": estado_pt})
+            print(f"    [CANDIDATO OPAT] {id_pt} | {area_pt}")
+
+        for pt in pts_esta_pagina:
+            if len(pts_agregados) >= MAX_APROBACIONES:
+                print("    LÍMITE DE SEGURIDAD ALCANZADO")
+                return pts_agregados, pts_fallidos, pts_omitidos
+
+            print(f"\n    >> Procesando {pt['id']} ({pt['area']})")
+
+            try:
+                if DRY_RUN:
+                    print(f"    [DRY RUN] {pt['id']}")
+                    pts_agregados.append({
+                        "id": pt["id"], "area": pt["area"],
+                        "opat": False, "opat_dry": True, "tipo_flujo": "EA"
+                    })
+                    continue
+
+                # ── 1. VERIFICAR SI YA EXISTE EN OPAT ────────────────────────
+                existe = await existe_pt_en_opat(opat_page, pt["id"])
+                if existe:
+                    pts_omitidos.append({
+                        "id": pt["id"], "area": pt["area"],
+                        "motivo": "Ya existe en agenda OPAT"
+                    })
+                    print(f"    [OMITIR YA EN OPAT] {pt['id']}")
+                    continue
+                if existe is None:
+                    print(f"    ADVERTENCIA: no se pudo confirmar existencia en OPAT para {pt['id']}, se intentará agregar igualmente")
+
+                # ── 2. LEER DETALLE EN CENTRALITY ────────────────────────────
+                datos_opat = await leer_detalle_pt(page, frame, pt["id"])
+                if not datos_opat:
+                    pts_fallidos.append(f"{pt['id']} - no se pudo leer detalle en Centrality")
+                    continue
+
+                # ── 3. SUBIR A OPAT (sin aprobar en Centrality) ──────────────
+                opat_ok = await subir_pt_a_opat(opat_page, datos_opat)
+
+                pts_agregados.append({
+                    "id":   pt["id"],
+                    "area": pt["area"],
+                    "opat": opat_ok,
+                    "tipo_flujo": "EA",
+                })
+
+            except Exception as e:
+                msg = str(e)[:250]
+                pts_fallidos.append(f"{pt['id']} - {msg}")
+                print(f"    EXCEPCIÓN: {msg}")
+
+        if len(pts_agregados) >= MAX_APROBACIONES:
+            break
+
+        if pagina < paginas:
+            sig = await frame.evaluate(JS_NEXT_PAGE)
+            if not sig:
+                break
+            await page.wait_for_timeout(4000)
+
+    return pts_agregados, pts_fallidos, pts_omitidos
 
 
 # =============================================================================
@@ -2036,7 +2261,13 @@ async def crear_aviso_cen(neo_page, datos):
         return None
 
 
-def enviar_reporte(pts_aprobados, pts_fallidos, pts_omitidos, error_critico=None):
+def enviar_reporte(pts_aprobados, pts_fallidos, pts_omitidos,
+                    pts_ea_agregados=None, pts_ea_fallidos=None, pts_ea_omitidos=None,
+                    error_critico=None):
+    pts_ea_agregados = pts_ea_agregados or []
+    pts_ea_fallidos  = pts_ea_fallidos  or []
+    pts_ea_omitidos  = pts_ea_omitidos  or []
+
     ahora_chile = datetime.now(TZ_CHILE)
     fecha       = ahora_chile.strftime("%d/%m/%Y")
     hora        = ahora_chile.strftime("%H:%M")
@@ -2121,6 +2352,41 @@ def enviar_reporte(pts_aprobados, pts_fallidos, pts_omitidos, error_critico=None
             f"{filas_pts(lista)}</table>"
         )
 
+    def filas_ea(lista):
+        if not lista:
+            return "<tr><td colspan='3' style='padding:6px 12px;color:#999'>Ninguno</td></tr>"
+        html = ""
+        for pt in lista:
+            opat_dry = pt.get("opat_dry", False)
+            if opat_dry:
+                opat_icon = "<span style='color:#888'>&#8212; (simulado)</span>"
+            elif pt.get("opat"):
+                opat_icon = "<span style='color:#006600;font-size:16px'>&#10003;</span>"
+            else:
+                opat_icon = "<span style='color:#cc0000;font-size:16px'>&#10007;</span>"
+            html += (
+                "<tr>"
+                f"<td style='font-family:monospace;padding:4px 12px'>{pt.get('id','')}</td>"
+                f"<td style='padding:4px 12px'>{pt.get('area','')}</td>"
+                f"<td style='padding:4px 12px;text-align:center'>{opat_icon}</td>"
+                "</tr>"
+            )
+        return html
+
+    def tabla_ea(lista, titulo):
+        opat_ok = sum(1 for pt in lista if pt.get("opat"))
+        return (
+            f"<h3 style='color:#0055aa;margin:20px 0 8px'>{titulo} ({len(lista)})"
+            f" &nbsp;<span style='font-size:13px;color:#555'>— Agregados a OPAT: {opat_ok}</span></h3>"
+            "<table style='border-collapse:collapse;width:100%'>"
+            "<tr style='background:#f6f6f6'>"
+            "<th style='padding:6px 12px;text-align:left'>PT</th>"
+            "<th style='padding:6px 12px;text-align:left'>Área de cobertura</th>"
+            "<th style='padding:6px 12px;text-align:center'>OPAT</th>"
+            "</tr>"
+            f"{filas_ea(lista)}</table>"
+        )
+
     error_bloque = ""
     if error_critico:
         error_bloque = (
@@ -2143,7 +2409,7 @@ def enviar_reporte(pts_aprobados, pts_fallidos, pts_omitidos, error_critico=None
         "<div style='background:#003580;color:white;padding:24px;border-radius:8px 8px 0 0'>"
         "<h2 style='margin:0;font-size:20px'>Reporte PT&rsquo;s &mdash; Centrality / DMS</h2>"
         "<p style='margin:6px 0 0;opacity:.8;font-size:14px'>"
-        "Aprobación PCCT y PCCT-FP &middot; Zonal Metropolitana</p>"
+        "Aprobación PCCT y PCCT-FP &middot; Zonal Metropolitana &middot; Esperando activación → OPAT</p>"
         "</div>"
         "<div style='border:1px solid #ddd;border-top:none;padding:20px 24px;border-radius:0 0 8px 8px'>"
         f"<p><strong>Fecha:</strong> {fecha} {hora}</p>"
@@ -2158,7 +2424,17 @@ def enviar_reporte(pts_aprobados, pts_fallidos, pts_omitidos, error_critico=None
         + "<table style='border-collapse:collapse;width:100%'>"
         + "<tr style='background:#f6f6f6'><th></th><th>PT</th><th>Área de cobertura</th><th>Motivo</th></tr>"
         + filas_omitidos_lista(pts_omitidos)
-        + "</table></div></body></html>"
+        + "</table>"
+        + "<hr style='margin:28px 0;border:none;border-top:1px solid #ddd'>"
+        + tabla_ea(pts_ea_agregados, "&#128230; PTs Agregados a OPAT — Esperando Activación")
+        + f"<h3 style='color:#cc0000;margin:20px 0 8px'>Esperando Activación — Errores ({len(pts_ea_fallidos)})</h3>"
+        + f"<table style='border-collapse:collapse;width:100%'>{filas_fallidos_lista(pts_ea_fallidos)}</table>"
+        + f"<h3 style='color:#888;margin:20px 0 8px'>Esperando Activación — Omitidos ({len(pts_ea_omitidos)})</h3>"
+        + "<table style='border-collapse:collapse;width:100%'>"
+        + "<tr style='background:#f6f6f6'><th></th><th>PT</th><th>Área de cobertura</th><th>Motivo</th></tr>"
+        + filas_omitidos_lista(pts_ea_omitidos)
+        + "</table>"
+        + "</div></body></html>"
     )
 
     if error_critico:
@@ -2168,8 +2444,9 @@ def enviar_reporte(pts_aprobados, pts_fallidos, pts_omitidos, error_critico=None
             f"[Reporte PTS Centrality] {fecha} {hora_ampm}"
             f" | PCCT: {len(pcct_aprobados)} aprobados"
             f" | FP: {total_fp} aprobados"
-            f" | {total_fallidos} errores"
-            f" | {total_omitidos} omitidos"
+            f" | EA→OPAT: {len(pts_ea_agregados)} agregados"
+            f" | {total_fallidos + len(pts_ea_fallidos)} errores"
+            f" | {total_omitidos + len(pts_ea_omitidos)} omitidos"
         )
 
     todos = [EMAIL_DEST] + EMAIL_CC
@@ -2199,6 +2476,9 @@ async def main():
     pts_aprobados = []
     pts_fallidos  = []
     pts_omitidos  = []
+    pts_ea_agregados = []
+    pts_ea_fallidos  = []
+    pts_ea_omitidos  = []
     error_critico = None
 
     async with async_playwright() as p:
@@ -2258,6 +2538,18 @@ async def main():
             pts_fallidos.extend(pts_fallidos_fp)
             pts_omitidos.extend(pts_omitidos_fp)
 
+            # ── PASADA 3: Esperando activación (excluye Metropolitana) ───────
+            print("\n" + "="*65)
+            print("  PASADA 3: Esperando activación → agregar a OPAT")
+            print("="*65)
+            await aplicar_filtro_pcct(
+                page_centrality, frame, ESTADO_ESPERANDO_ACTIVACION,
+                limpiar_primero=True, desmarcar_bandeja=True
+            )
+            pts_ea_agregados, pts_ea_fallidos, pts_ea_omitidos = await procesar_esperando_activacion(
+                page_centrality, frame, page_opat
+            )
+
         except Exception as e:
             error_critico = str(e)
             print(f"\nERROR CRÍTICO: {e}")
@@ -2271,9 +2563,14 @@ async def main():
 
     print(f"\n{sep}")
     print(f"  {len(pts_aprobados)} aprobados | {len(pts_fallidos)} errores | {len(pts_omitidos)} omitidos")
+    print(f"  {len(pts_ea_agregados)} agregados a OPAT (EA) | {len(pts_ea_fallidos)} errores | {len(pts_ea_omitidos)} omitidos")
     print(f"{sep}")
 
-    enviar_reporte(pts_aprobados, pts_fallidos, pts_omitidos, error_critico)
+    enviar_reporte(
+        pts_aprobados, pts_fallidos, pts_omitidos,
+        pts_ea_agregados, pts_ea_fallidos, pts_ea_omitidos,
+        error_critico
+    )
     print("Fin.\n")
 
 
