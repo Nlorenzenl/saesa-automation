@@ -583,18 +583,22 @@ async def leer_detalle_pt(page, frame, pt_id):
         se_linea      = detalle.get("Elemento referencia", "")
         componentes   = detalle.get("Detalle de instalación", "")
         descripcion   = detalle.get("Descripción del trabajo general", "")
+        area_texto        = detalle.get("Área", "")
+        responsable_caso  = detalle.get("Responsable del caso", "")
 
         return {
-            "id":            pt_id,
-            "fecha_inicio":  fecha_inicio,
-            "hora_inicio":   hora_inicio,
-            "fecha_fin":     fecha_fin,
-            "hora_fin":      hora_fin,
-            "tipo_trabajo":  tipo_trabajo,
-            "se_linea":      se_linea,
-            "componentes":   componentes,
-            "descripcion":   descripcion,
-            "raw":           detalle,
+            "id":               pt_id,
+            "fecha_inicio":     fecha_inicio,
+            "hora_inicio":      hora_inicio,
+            "fecha_fin":        fecha_fin,
+            "hora_fin":         hora_fin,
+            "tipo_trabajo":     tipo_trabajo,
+            "se_linea":         se_linea,
+            "componentes":      componentes,
+            "descripcion":      descripcion,
+            "area_texto":       area_texto,
+            "responsable_caso": responsable_caso,
+            "raw":              detalle,
         }
     except Exception as e:
         print(f"    ERROR leyendo detalle: {e}")
@@ -1005,7 +1009,8 @@ async def subir_pt_a_opat(opat_page, datos):
             print(f"  SE o Línea: {datos['se_linea']} → {r}")
             await opat_page.wait_for_timeout(300)
 
-        # ── ÁREA ZONAL ────────────────────────────────────────────────────────
+        # ── ÁREA ZONAL (texto literal traído desde el campo 'Área' de Centrality) ─
+        area_zonal_valor = datos.get("area_texto") or "Área Mtto Zonal Metropolitana"
         r = await opat_page.evaluate("""
         (val) => {
             var modal = document.getElementById('modalEditarPT');
@@ -1021,9 +1026,44 @@ async def subir_pt_a_opat(opat_page, datos):
             }
             return 'not_found';
         }
-        """, "Área Mtto Zonal Metropolitana")
-        print(f"  Área Zonal → {r}")
+        """, area_zonal_valor)
+        print(f"  Área Zonal → '{area_zonal_valor}' → {r}")
         await opat_page.wait_for_timeout(300)
+
+        # ── PROGRAMADOR (Responsable del caso en Centrality) ─────────────────
+        if datos.get("responsable_caso"):
+            r = await opat_page.evaluate(f"""
+            (val) => {{
+                var modal = document.getElementById('modalEditarPT');
+                var labels = Array.from(modal.querySelectorAll('label'));
+                for (var i=0; i<labels.length; i++) {{
+                    var lt = (labels[i].innerText || '').trim().toLowerCase();
+                    if (lt.includes('programador')) {{
+                        var forId = labels[i].getAttribute('for');
+                        var el = forId ? document.getElementById(forId) : null;
+                        if (el) {{
+                            el.value = val;
+                            el.dispatchEvent(new Event('input', {{bubbles:true}}));
+                            el.dispatchEvent(new Event('change', {{bubbles:true}}));
+                            return 'ok:' + forId;
+                        }}
+                    }}
+                }}
+                var inputs = Array.from(modal.querySelectorAll('input[type="text"]'));
+                for (var j=0; j<inputs.length; j++) {{
+                    var ph = (inputs[j].placeholder || '').toLowerCase();
+                    if (ph.includes('programador') || ph.includes('nicolas') || ph.includes('nicolás')) {{
+                        inputs[j].value = val;
+                        inputs[j].dispatchEvent(new Event('input', {{bubbles:true}}));
+                        inputs[j].dispatchEvent(new Event('change', {{bubbles:true}}));
+                        return 'fallback_placeholder:' + inputs[j].id;
+                    }}
+                }}
+                return 'not_found';
+            }}
+            """, datos["responsable_caso"])
+            print(f"  Programador: {datos['responsable_caso']} → {r}")
+            await opat_page.wait_for_timeout(300)
 
         # ── COMPONENTES ───────────────────────────────────────────────────────
         if datos.get("componentes"):
