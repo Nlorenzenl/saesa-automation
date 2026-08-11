@@ -745,6 +745,266 @@ async def aplicar_filtro_pcct(page, frame, estado_texto=None, limpiar_primero=Fa
 # LIMPIAR FILTRO PCCT
 # =============================================================================
 
+# =============================================================================
+# HELPERS GENÉRICOS DE COMBOS EN EL PANEL DE FILTROS
+# =============================================================================
+
+async def abrir_combo_filtro(frame, label_texto):
+    """Abre el combo asociado a un label exacto dentro de la ventana Filtros (ej. 'Estado:',
+    'Tipo de permiso de trabajo:')."""
+    return await frame.evaluate("""
+    (labelBuscado) => {
+        const win = Array.from(document.querySelectorAll(".x-window"))
+            .filter(w => w.offsetParent && (w.innerText || "").includes("Filtros"))[0];
+        if (!win) return {ok:false, msg:"No encontré ventana Filtros"};
+        const labels = Array.from(win.querySelectorAll("label,td,div,span,b"))
+            .filter(el => el.offsetParent);
+        let target = null;
+        for (const el of labels) {
+            if ((el.innerText || "").trim() === labelBuscado) { target = el; break; }
+        }
+        if (!target) return {ok:false, msg:"No encontré label " + labelBuscado};
+        const lr = target.getBoundingClientRect();
+        const wr = win.getBoundingClientRect();
+        const y = lr.y + lr.height / 2;
+        const x = wr.right - 22;
+        const el = document.elementFromPoint(x, y);
+        if (!el) return {ok:false, msg:"elementFromPoint no encontró elemento"};
+        el.click();
+        return {ok:true, x:Math.round(x), y:Math.round(y)};
+    }
+    """, label_texto)
+
+
+async def seleccionar_item_combo(frame, texto_buscar):
+    """Selecciona, dentro de la lista desplegada de un combo ExtJS, el item cuyo texto
+    (ya limpio de prefijos de árbol) coincide exactamente con texto_buscar."""
+    return await frame.evaluate("""
+    (buscar) => {
+        const items = Array.from(document.querySelectorAll(".x-combo-list-item"))
+            .filter(el => el.offsetParent);
+        for (const item of items) {
+            const raw = (item.innerText || "").trim();
+            const limpio = raw.replace(/^[\\u2500\\u2502\\u2514\\u251c\\u2007\\s\\-]+/, '').trim();
+            if (limpio === buscar) {
+                item.scrollIntoView({block: "center"});
+                var e1 = new MouseEvent("mousedown", {bubbles:true, cancelable:true});
+                var e2 = new MouseEvent("mouseup",   {bubbles:true, cancelable:true});
+                var e3 = new MouseEvent("click",     {bubbles:true, cancelable:true});
+                item.dispatchEvent(e1);
+                item.dispatchEvent(e2);
+                item.dispatchEvent(e3);
+                return {ok:true, texto:raw};
+            }
+        }
+        return {ok:false};
+    }
+    """, texto_buscar)
+
+
+# =============================================================================
+# FILTRO SIN CONDICIONES (12 horas) — Estado: Aprobada
+# =============================================================================
+
+TIPO_PERMISO_SIN_CONDICIONES = "SIN CONDICIONES (12 horas)"
+ESTADO_APROBADA = "Aprobada"
+
+
+async def aplicar_filtro_sin_condiciones(page, frame):
+    print(f"\n[3] FILTRO — Tipo de permiso: {TIPO_PERMISO_SIN_CONDICIONES} / Estado: {ESTADO_APROBADA}")
+    await frame.click('text=Filtro')
+    await page.wait_for_timeout(2000)
+
+    # 1. Limpiar filtros previos
+    r_limpiar = await frame.evaluate("""
+    () => {
+        const win = Array.from(document.querySelectorAll(".x-window"))
+            .filter(w => w.offsetParent && (w.innerText || "").includes("Filtros"))[0];
+        if (!win) return {ok:false, msg:"No encontré ventana Filtros"};
+        const btns = Array.from(win.querySelectorAll("button, a, .x-btn"));
+        for (const b of btns) {
+            const t = (b.innerText || b.textContent || "").trim();
+            if (t === "Limpiar") { b.click(); return {ok:true}; }
+        }
+        return {ok:false, msg:"Botón Limpiar no encontrado"};
+    }
+    """)
+    print(f"  limpiar previo: {r_limpiar}")
+    await page.wait_for_timeout(1500)
+
+    # 2. Desmarcar 'En bandeja de trabajo'
+    r_checkbox = await frame.evaluate("""
+    () => {
+        const win = Array.from(document.querySelectorAll(".x-window"))
+            .filter(w => w.offsetParent && (w.innerText || "").includes("Filtros"))[0];
+        if (!win) return {ok:false, msg:"No encontré ventana Filtros"};
+        const labels = Array.from(win.querySelectorAll("label,td,div,span"))
+            .filter(el => el.offsetParent);
+        let target = null;
+        for (const el of labels) {
+            if ((el.innerText || "").trim().indexOf("En bandeja de trabajo") === 0) { target = el; break; }
+        }
+        if (!target) return {ok:false, msg:"No encontré label 'En bandeja de trabajo'"};
+        const tr = target.closest("tr") || win;
+        const cb = tr.querySelector('input[type="checkbox"]');
+        if (!cb) return {ok:false, msg:"No encontré checkbox"};
+        if (cb.checked) { cb.click(); }
+        return {ok:true, checked: cb.checked};
+    }
+    """)
+    print(f"  desmarcar 'En bandeja de trabajo': {r_checkbox}")
+    await page.wait_for_timeout(800)
+
+    # 3. Tipo de permiso de trabajo → SIN CONDICIONES (12 horas)
+    r_tipo_trigger = await abrir_combo_filtro(frame, "Tipo de permiso de trabajo:")
+    print(f"  trigger Tipo de permiso: {r_tipo_trigger}")
+    if not r_tipo_trigger.get("ok"):
+        raise RuntimeError(f"No se pudo abrir combo Tipo de permiso de trabajo: {r_tipo_trigger}")
+    await page.wait_for_timeout(1500)
+    r_tipo_pick = await seleccionar_item_combo(frame, TIPO_PERMISO_SIN_CONDICIONES)
+    print(f"  selección Tipo de permiso: {r_tipo_pick}")
+    if not r_tipo_pick.get("ok"):
+        raise RuntimeError(f"No se pudo seleccionar Tipo de permiso {TIPO_PERMISO_SIN_CONDICIONES!r}: {r_tipo_pick}")
+    await page.wait_for_timeout(1000)
+
+    # 4. Estado → Aprobada
+    r_estado_trigger = await abrir_combo_filtro(frame, "Estado:")
+    print(f"  trigger Estado: {r_estado_trigger}")
+    if not r_estado_trigger.get("ok"):
+        raise RuntimeError(f"No se pudo abrir combo Estado: {r_estado_trigger}")
+    await page.wait_for_timeout(1500)
+    r_estado_pick = await seleccionar_item_combo(frame, ESTADO_APROBADA)
+    print(f"  selección Estado: {r_estado_pick}")
+    if not r_estado_pick.get("ok"):
+        raise RuntimeError(f"No se pudo seleccionar Estado {ESTADO_APROBADA!r}: {r_estado_pick}")
+    await page.wait_for_timeout(1000)
+
+    # 5. Aplicar
+    aplicar_btn = frame.locator("button.x-btn-text.apply", has_text="Aplicar").first
+    await aplicar_btn.click(timeout=5000, force=True)
+    await page.wait_for_timeout(8000)
+
+    filtro_abierto = await frame.evaluate("""
+    () => {
+        const win = Array.from(document.querySelectorAll(".x-window"))
+            .filter(w => w.offsetParent && (w.innerText || "").includes("Filtros"))[0];
+        return !!win;
+    }
+    """)
+    if filtro_abierto:
+        await aplicar_btn.dblclick(timeout=5000, force=True)
+        await page.wait_for_timeout(8000)
+
+    info = await frame.evaluate("""
+    () => {
+        const rows = document.querySelectorAll(".x-grid3-row");
+        const pag = Array.from(document.querySelectorAll("*"))
+            .filter(e => e.children.length===0 && e.offsetParent &&
+                         (e.innerText||"").indexOf("Mostrando")>=0)
+            .map(e => e.innerText.trim());
+        return {filas: rows.length, paginador: pag};
+    }
+    """)
+    print(f"  resultado filtro: {info}")
+
+
+# =============================================================================
+# PROCESAR PTs "SIN CONDICIONES" (todas las zonas) → SOLO OPAT
+# =============================================================================
+
+async def procesar_sin_condiciones(page, frame, opat_page):
+    """
+    Igual que procesar_esperando_activacion, pero SIN excluir Metropolitana:
+    recorre la grilla filtrada por Tipo de permiso = 'SIN CONDICIONES (12 horas)' y
+    Estado = 'Aprobada', y para cada PT verifica si ya existe en OPAT; si no existe,
+    lee el detalle y lo sube. No aprueba nada en Centrality.
+    """
+    print(f"\n[4-SC] Procesando PTs '{TIPO_PERMISO_SIN_CONDICIONES}' / Estado '{ESTADO_APROBADA}' (todas las zonas → solo OPAT)")
+    print(f"  DRY_RUN: {DRY_RUN}")
+
+    pts_agregados = []
+    pts_fallidos  = []
+    pts_omitidos  = []
+
+    total_paginas = await frame.evaluate(JS_GET_TOTAL_PAGES)
+    paginas = min(total_paginas, 20)
+    print(f"  Total páginas: {total_paginas}")
+
+    for pagina in range(1, paginas + 1):
+        print(f"\n  ── Página {pagina}/{paginas} ──")
+        await page.wait_for_timeout(1500)
+
+        filas = await frame.evaluate(JS_READ_ROWS)
+        print(f"  Filas leídas: {len(filas)}")
+
+        pts_esta_pagina = []
+        for row in filas:
+            if not row:
+                continue
+            id_pt, area_pt, estado_pt = extraer_info_fila(row)
+            if not id_pt:
+                continue
+            pts_esta_pagina.append({"id": id_pt, "area": area_pt, "estado": estado_pt})
+            print(f"    [CANDIDATO OPAT] {id_pt} | {area_pt}")
+
+        for pt in pts_esta_pagina:
+            if len(pts_agregados) >= MAX_APROBACIONES:
+                print("    LÍMITE DE SEGURIDAD ALCANZADO")
+                return pts_agregados, pts_fallidos, pts_omitidos
+
+            print(f"\n    >> Procesando {pt['id']} ({pt['area']})")
+
+            try:
+                if DRY_RUN:
+                    print(f"    [DRY RUN] {pt['id']}")
+                    pts_agregados.append({
+                        "id": pt["id"], "area": pt["area"],
+                        "opat": False, "opat_dry": True, "tipo_flujo": "SC"
+                    })
+                    continue
+
+                existe = await existe_pt_en_opat(opat_page, pt["id"])
+                if existe:
+                    pts_omitidos.append({
+                        "id": pt["id"], "area": pt["area"],
+                        "motivo": "Ya existe en agenda OPAT"
+                    })
+                    print(f"    [OMITIR YA EN OPAT] {pt['id']}")
+                    continue
+                if existe is None:
+                    print(f"    ADVERTENCIA: no se pudo confirmar existencia en OPAT para {pt['id']}, se intentará agregar igualmente")
+
+                datos_opat = await leer_detalle_pt(page, frame, pt["id"])
+                if not datos_opat:
+                    pts_fallidos.append(f"{pt['id']} - no se pudo leer detalle en Centrality")
+                    continue
+
+                opat_ok = await subir_pt_a_opat(opat_page, datos_opat)
+
+                pts_agregados.append({
+                    "id":   pt["id"],
+                    "area": pt["area"],
+                    "opat": opat_ok,
+                    "tipo_flujo": "SC",
+                })
+
+            except Exception as e:
+                msg = str(e)[:250]
+                pts_fallidos.append(f"{pt['id']} - {msg}")
+                print(f"    EXCEPCIÓN: {msg}")
+
+        if len(pts_agregados) >= MAX_APROBACIONES:
+            break
+
+        if pagina < paginas:
+            sig = await frame.evaluate(JS_NEXT_PAGE)
+            if not sig:
+                break
+            await page.wait_for_timeout(4000)
+
+    return pts_agregados, pts_fallidos, pts_omitidos
+
+
 async def limpiar_filtro_pcct(page, frame):
     """Abre el panel de filtros y limpia el campo Estado, luego aplica."""
     print("\n[FILTRO] Limpiando filtro Estado...")
@@ -2544,10 +2804,14 @@ async def crear_aviso_cen(neo_page, datos):
 
 def enviar_reporte(pts_aprobados, pts_fallidos, pts_omitidos,
                     pts_ea_agregados=None, pts_ea_fallidos=None, pts_ea_omitidos=None,
+                    pts_sc_agregados=None, pts_sc_fallidos=None, pts_sc_omitidos=None,
                     error_critico=None):
     pts_ea_agregados = pts_ea_agregados or []
     pts_ea_fallidos  = pts_ea_fallidos  or []
     pts_ea_omitidos  = pts_ea_omitidos  or []
+    pts_sc_agregados = pts_sc_agregados or []
+    pts_sc_fallidos  = pts_sc_fallidos  or []
+    pts_sc_omitidos  = pts_sc_omitidos  or []
 
     ahora_chile = datetime.now(TZ_CHILE)
     fecha       = ahora_chile.strftime("%d/%m/%Y")
@@ -2715,6 +2979,15 @@ def enviar_reporte(pts_aprobados, pts_fallidos, pts_omitidos,
         + "<tr style='background:#f6f6f6'><th></th><th>PT</th><th>Área de cobertura</th><th>Motivo</th></tr>"
         + filas_omitidos_lista(pts_ea_omitidos)
         + "</table>"
+        + "<hr style='margin:28px 0;border:none;border-top:1px solid #ddd'>"
+        + tabla_ea(pts_sc_agregados, "&#128230; PTs Agregados a OPAT — Sin Condiciones (12 horas)")
+        + f"<h3 style='color:#cc0000;margin:20px 0 8px'>Sin Condiciones — Errores ({len(pts_sc_fallidos)})</h3>"
+        + f"<table style='border-collapse:collapse;width:100%'>{filas_fallidos_lista(pts_sc_fallidos)}</table>"
+        + f"<h3 style='color:#888;margin:20px 0 8px'>Sin Condiciones — Omitidos ({len(pts_sc_omitidos)})</h3>"
+        + "<table style='border-collapse:collapse;width:100%'>"
+        + "<tr style='background:#f6f6f6'><th></th><th>PT</th><th>Área de cobertura</th><th>Motivo</th></tr>"
+        + filas_omitidos_lista(pts_sc_omitidos)
+        + "</table>"
         + "</div></body></html>"
     )
 
@@ -2726,8 +2999,9 @@ def enviar_reporte(pts_aprobados, pts_fallidos, pts_omitidos,
             f" | PCCT: {len(pcct_aprobados)} aprobados"
             f" | FP: {total_fp} aprobados"
             f" | EA→OPAT: {len(pts_ea_agregados)} agregados"
-            f" | {total_fallidos + len(pts_ea_fallidos)} errores"
-            f" | {total_omitidos + len(pts_ea_omitidos)} omitidos"
+            f" | SC→OPAT: {len(pts_sc_agregados)} agregados"
+            f" | {total_fallidos + len(pts_ea_fallidos) + len(pts_sc_fallidos)} errores"
+            f" | {total_omitidos + len(pts_ea_omitidos) + len(pts_sc_omitidos)} omitidos"
         )
 
     todos = [EMAIL_DEST] + EMAIL_CC
@@ -2760,6 +3034,9 @@ async def main():
     pts_ea_agregados = []
     pts_ea_fallidos  = []
     pts_ea_omitidos  = []
+    pts_sc_agregados = []
+    pts_sc_fallidos  = []
+    pts_sc_omitidos  = []
     error_critico = None
 
     async with async_playwright() as p:
@@ -2831,6 +3108,15 @@ async def main():
                 page_centrality, frame, page_opat
             )
 
+            # ── PASADA 4: Sin Condiciones (12 horas) / Estado Aprobada ───────
+            print("\n" + "="*65)
+            print("  PASADA 4: Sin Condiciones (12 horas) → agregar a OPAT")
+            print("="*65)
+            await aplicar_filtro_sin_condiciones(page_centrality, frame)
+            pts_sc_agregados, pts_sc_fallidos, pts_sc_omitidos = await procesar_sin_condiciones(
+                page_centrality, frame, page_opat
+            )
+
         except Exception as e:
             error_critico = str(e)
             print(f"\nERROR CRÍTICO: {e}")
@@ -2845,11 +3131,13 @@ async def main():
     print(f"\n{sep}")
     print(f"  {len(pts_aprobados)} aprobados | {len(pts_fallidos)} errores | {len(pts_omitidos)} omitidos")
     print(f"  {len(pts_ea_agregados)} agregados a OPAT (EA) | {len(pts_ea_fallidos)} errores | {len(pts_ea_omitidos)} omitidos")
+    print(f"  {len(pts_sc_agregados)} agregados a OPAT (SC) | {len(pts_sc_fallidos)} errores | {len(pts_sc_omitidos)} omitidos")
     print(f"{sep}")
 
     enviar_reporte(
         pts_aprobados, pts_fallidos, pts_omitidos,
         pts_ea_agregados, pts_ea_fallidos, pts_ea_omitidos,
+        pts_sc_agregados, pts_sc_fallidos, pts_sc_omitidos,
         error_critico
     )
     print("Fin.\n")
