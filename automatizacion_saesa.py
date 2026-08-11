@@ -31,7 +31,7 @@ NEOMANTE_PASS = os.environ["NEOMANTE_PASS"]
 GMAIL_USER = os.environ["GMAIL_USER"]
 GMAIL_PASS = os.environ["GMAIL_APP_PASS"]
 EMAIL_DEST = os.environ["EMAIL_DEST"]
-EMAIL_CC   = ["nicolas.lorenzen@saesa.cl"]
+EMAIL_CC   = ["nicolas.lorenzen@saesa.cl", "jorge.canete@saesa.cl", "alexis.aedo@saesa.cl", "jeanine.valenzuela@saesa.cl"]
 
 DRY_RUN          = os.environ.get("DRY_RUN", "true").lower() == "true"
 MAX_APROBACIONES = int(os.environ.get("MAX_APROBACIONES", "50"))
@@ -281,6 +281,15 @@ def obtener_zona_por_se(se_linea_texto):
         if clave in k or k in clave:
             return v
     return None
+
+
+# El dropdown "Zona" en OPAT usa "Zona Norte" / "Metropolitana" / "Zona Sur" como texto
+# visible de cada opción (Metropolitana no lleva el prefijo "Zona ").
+ZONA_DROPDOWN_TEXTO = {
+    "Norte": "Zona Norte",
+    "Metropolitana": "Metropolitana",
+    "Sur": "Zona Sur",
+}
 
 
 # =============================================================================
@@ -1091,7 +1100,8 @@ async def subir_pt_a_opat(opat_page, datos):
         await opat_page.wait_for_timeout(300)
 
         # ── ZONA (Norte/Metropolitana/Sur, según SUBESTACIONES_GERENCIA_ZONAL) ──
-        zona_valor = obtener_zona_por_se(datos.get("se_linea", "")) or "Metropolitana"
+        zona_valor  = obtener_zona_por_se(datos.get("se_linea", "")) or "Metropolitana"
+        zona_opcion = ZONA_DROPDOWN_TEXTO.get(zona_valor, zona_valor)
         r = await opat_page.evaluate("""
         (val) => {
             var modal = document.getElementById('modalEditarPT');
@@ -1116,8 +1126,8 @@ async def subir_pt_a_opat(opat_page, datos):
             }
             return 'not_found_option';
         }
-        """, zona_valor)
-        print(f"  Zona: '{datos.get('se_linea','')}' → {zona_valor} → {r}")
+        """, zona_opcion)
+        print(f"  Zona: '{datos.get('se_linea','')}' → {zona_valor} ('{zona_opcion}') → {r}")
         await opat_page.wait_for_timeout(300)
 
         # ── FECHA INICIO ──────────────────────────────────────────────────────
