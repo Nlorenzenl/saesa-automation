@@ -2,6 +2,7 @@ import asyncio
 import os
 import re
 import smtplib
+import unicodedata
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from email.mime.multipart import MIMEMultipart
@@ -42,6 +43,244 @@ ESTADO_EXACTO    = "Revisión y Autorización PCCT"
 ESTADO_EXACTO_FP = "Revisión y Autorización PCCT - FP"
 ESTADO_ESPERANDO_ACTIVACION = "Esperando activación"
 AREA_KEYWORDS = ["metropolitana"]
+
+
+# =============================================================================
+# LISTADO DE SUBESTACIONES → GERENCIA ZONAL (para el campo "Zona" en OPAT)
+# =============================================================================
+
+SUBESTACIONES_GERENCIA_ZONAL = {
+    'S/E ALONSO DE CORDOVA': 'Metropolitana',
+    'S/E ALTAMIRANO': 'Metropolitana',
+    'S/E ANDES (STM)': 'Metropolitana',
+    'S/E APOQUINDO': 'Metropolitana',
+    'S/E BATUCO': 'Metropolitana',
+    'S/E BRASIL': 'Metropolitana',
+    'S/E BUIN (STM)': 'Metropolitana',
+    'S/E CALEU': 'Metropolitana',
+    'S/E CARRASCAL': 'Metropolitana',
+    'S/E CHACABUCO': 'Metropolitana',
+    'S/E CHENA': 'Metropolitana',
+    'S/E CLUB HIPICO': 'Metropolitana',
+    'S/E CURACAVI': 'Metropolitana',
+    'S/E EL MANZANO (STM)': 'Metropolitana',
+    'S/E EL SALTO': 'Metropolitana',
+    'S/E FLORIDA': 'Metropolitana',
+    'S/E LA CISTERNA': 'Metropolitana',
+    'S/E LA DEHESA': 'Metropolitana',
+    'S/E LA PINTANA': 'Metropolitana',
+    'S/E LA REINA': 'Metropolitana',
+    'S/E LAMPA': 'Metropolitana',
+    'S/E LAS ACACIAS': 'Metropolitana',
+    'S/E LO AGUIRRE': 'Metropolitana',
+    'S/E LO BOZA': 'Metropolitana',
+    'TAP OFF LO ESPEJO': 'Metropolitana',
+    'S/E LO PRADO': 'Metropolitana',
+    'S/E LO VALLEDOR': 'Metropolitana',
+    'S/E LORD COCHRANE': 'Metropolitana',
+    'S/E LOS ALMENDROS': 'Metropolitana',
+    'S/E LOS DOMINICOS': 'Metropolitana',
+    'S/E MACUL': 'Metropolitana',
+    'S/E MAIPU': 'Metropolitana',
+    'S/E MALLOCO': 'Metropolitana',
+    'S/E OCHAGAVIA': 'Metropolitana',
+    'S/E PAJARITOS': 'Metropolitana',
+    'S/E PANAMERICANA': 'Metropolitana',
+    'S/E POLPAICO (STM)': 'Metropolitana',
+    'S/E PUDAHUEL': 'Metropolitana',
+    'S/E QUILICURA': 'Metropolitana',
+    'S/E RECOLETA': 'Metropolitana',
+    'S/E RENCA': 'Metropolitana',
+    'S/E RUNGUE': 'Metropolitana',
+    'S/E SAN BERNARDO': 'Metropolitana',
+    'S/E SAN CRISTOBAL': 'Metropolitana',
+    'S/E SAN JOAQUIN (STM)': 'Metropolitana',
+    'S/E SAN JOSE': 'Metropolitana',
+    'S/E SAN PABLO': 'Metropolitana',
+    'S/E SANTA ELENA': 'Metropolitana',
+    'S/E SANTA MARTA': 'Metropolitana',
+    'S/E SANTA RAQUEL': 'Metropolitana',
+    'S/E SANTA ROSA SUR': 'Metropolitana',
+    'S/E VITACURA': 'Metropolitana',
+    'S/E BICENTENARIO': 'Metropolitana',
+    'S/E CHICUREO': 'Metropolitana',
+    'S/E CERRO NAVIA (STM)': 'Metropolitana',
+    'S/E NUEVA LAMPA': 'Metropolitana',
+    'S/E MOVIL': 'Metropolitana',
+    'S/E MOVIL REGION METROPOLITANA [EN_REVISION]': 'Metropolitana',
+    'S/E QUINTA': 'Metropolitana',
+    'S/E FUENTECILLA': 'Metropolitana',
+    'S/E PUQUILLAY': 'Metropolitana',
+    'S/E SANTA CRUZ': 'Metropolitana',
+    'S/E TRINIDAD': 'Metropolitana',
+    'S/E CURICO': 'Metropolitana',
+    'S/E ALTO JAHUEL': 'Metropolitana',
+    'S/E CERRO NAVIA (TRANSELEC)': 'Metropolitana',
+    'S/E POLPAICO (TRANSELEC)': 'Metropolitana',
+    'S/E METRO': 'Metropolitana',
+    'S/E MARIA ELENA': 'Norte',
+    'S/E SECCIONADORA SAN ANDRES': 'Norte',
+    'S/E KIMAL': 'Norte',
+    'S/E GUARDIAMARINA': 'Norte',
+    'S/E LA RUCA': 'Norte',
+    'S/E KAPATUR': 'Norte',
+    'S/E ARMAZONES': 'Norte',
+    'S/E PARANAL': 'Norte',
+    'S/E PAPOSO': 'Norte',
+    'S/E MAITENCILLO': 'Norte',
+    'S/E SAN FABIAN': 'Sur',
+    'S/E SECCIONADORA RIO TOLTEN': 'Sur',
+    'S/E LA SEÑORAZA': 'Sur',
+    'S/E EPULEUFU': 'Sur',
+    'S/E CENTRAL CORONEL': 'Sur',
+    'S/E MASISA': 'Sur',
+    'S/E MAPAL': 'Sur',
+    'S/E CORRAL': 'Sur',
+    'S/E ANCUD': 'Sur',
+    'S/E CHOLGUAN (STS)': 'Sur',
+    'S/E CHONCHI': 'Sur',
+    'S/E COLACO': 'Sur',
+    'S/E LOS NEGROS': 'Sur',
+    'S/E EL EMPALME': 'Sur',
+    'S/E BARRO BLANCO': 'Sur',
+    'S/E FRUTILLAR': 'Sur',
+    'S/E AIHUAPI': 'Sur',
+    'S/E LA UNION': 'Sur',
+    'S/E MELIPULLI': 'Sur',
+    'S/E LOS LAGOS': 'Sur',
+    'S/E PID PID': 'Sur',
+    'S/E OSORNO': 'Sur',
+    'S/E PANGUIPULLI': 'Sur',
+    'S/E PICARTE': 'Sur',
+    'S/E PICHIRROPULLI': 'Sur',
+    'S/E PUERTO VARAS': 'Sur',
+    'S/E PURRANQUE': 'Sur',
+    'S/E QUELLON': 'Sur',
+    'S/E CALBUCO': 'Sur',
+    'S/E CASTRO': 'Sur',
+    'S/E DEGAÑ': 'Sur',
+    'S/E PUERTO MONTT (STS)': 'Sur',
+    'S/E VALDIVIA (STS)': 'Sur',
+    'S/E CHILOE': 'Sur',
+    'S/E CABRERO': 'Sur',
+    'S/E IMPERIAL': 'Sur',
+    'S/E LICANCO': 'Sur',
+    'S/E LOTA': 'Sur',
+    'S/E NEGRETE': 'Sur',
+    'S/E MARIQUINA': 'Sur',
+    'S/E ANTILLANCA': 'Sur',
+    'S/E RIO BONITO': 'Sur',
+    'S/E CAÑETE': 'Sur',
+    'S/E LOS SAUCES': 'Sur',
+    'S/E PILAUCO': 'Sur',
+    'S/E PICOLTUE': 'Sur',
+    'S/E LOS TAMBORES': 'Sur',
+    'S/E ALTO BONITO': 'Sur',
+    'S/E PICHIL': 'Sur',
+    'S/E COPIHUES': 'Sur',
+    'S/E NAHUELBUTA': 'Sur',
+    'S/E DALCAHUE': 'Sur',
+    'S/E SANTA BARBARA': 'Sur',
+    'S/E MANTILHUE': 'Sur',
+    'S/E CUNCO': 'Sur',
+    'S/E DEUCO': 'Sur',
+    'S/E RIO NEGRO': 'Sur',
+    'S/E CHIRRE': 'Sur',
+    'S/E PARGUA': 'Sur',
+    'S/E LLOLLELHUE': 'Sur',
+    'S/E SANGRA': 'Sur',
+    'S/E GAMBOA': 'Sur',
+    'S/E LA MISION': 'Sur',
+    'S/E REMEHUE': 'Sur',
+    'S/E LLANQUIHUE': 'Sur',
+    'S/E LUCERO': 'Sur',
+    'S/E LARQUI': 'Sur',
+    'S/E LLAIMA': 'Sur',
+    'S/E MONTENEGRO': 'Sur',
+    'S/E PAILLACO': 'Sur',
+    'S/E PUERTO MONTT': 'Sur',
+    'S/E RAHUE': 'Sur',
+    'S/E CIRUELOS': 'Sur',
+    'S/E VALDIVIA': 'Sur',
+    'S/E LONCOCHE': 'Sur',
+    'S/E NUEVA PICHIRROPULLI': 'Sur',
+    'S/E EL LAUREL': 'Sur',
+    'S/E CENTRAL PILMAIQUEN': 'Sur',
+    'S/E ANCOA': 'Sur',
+    'S/E MULCHEN': 'Sur',
+    'S/E FAENAS PANGUE': 'Sur',
+    'S/E COLLIPULLI': 'Sur',
+    'S/E ANGOL': 'Sur',
+    'S/E LAJA': 'Sur',
+    'S/E CELULOSA LAJA': 'Sur',
+    'S/E NUEVA ANCUD': 'Sur',
+    'S/E CARAMPANGUE': 'Sur',
+}
+
+# =============================================================================
+# PROGRAMADOR (Responsable del caso en Centrality) → SIGLA (campo Programador en OPAT)
+# =============================================================================
+
+def _normalizar_nombre_persona(txt):
+    """Mayúsculas, sin tildes/diéresis, espacios colapsados — para matchear nombres con variaciones."""
+    t = (txt or "").strip().upper()
+    t = unicodedata.normalize("NFKD", t)
+    t = "".join(c for c in t if not unicodedata.combining(c))
+    return " ".join(t.split())
+
+
+PROGRAMADOR_SIGLAS = {
+    _normalizar_nombre_persona("Wilson Pino"): "wpm",
+    _normalizar_nombre_persona("Wilso Pino"): "wpm",  # variante/typo observada
+    _normalizar_nombre_persona("Rodolfo Prieto"): "rpp",
+    _normalizar_nombre_persona("Carla Ruiz"): "cro",
+    _normalizar_nombre_persona("Juan Miranda"): "jma",
+    _normalizar_nombre_persona("Alexis Aedo"): "aas",
+    _normalizar_nombre_persona("Nicolas Lorenzen"): "nll",
+    _normalizar_nombre_persona("Jorge Cañete"): "jcm",
+}
+
+
+def obtener_sigla_programador(nombre_responsable):
+    """Retorna la sigla del programador según PROGRAMADOR_SIGLAS, o None si no hay match."""
+    if not nombre_responsable:
+        return None
+    return PROGRAMADOR_SIGLAS.get(_normalizar_nombre_persona(nombre_responsable))
+
+
+# =============================================================================
+# SE/LÍNEA → ZONA (Norte / Metropolitana / Sur) usando SUBESTACIONES_GERENCIA_ZONAL
+# =============================================================================
+
+def _normalizar_nombre_se(txt):
+    """Quita prefijo S/E, sufijos entre paréntesis, tildes y espacios extra — para matchear
+    el texto de 'SE o Línea' de Centrality contra las claves de SUBESTACIONES_GERENCIA_ZONAL."""
+    t = (txt or "").strip().upper()
+    t = re.sub(r"\(.*?\)", "", t)          # quita "(Subestación)", "(Línea - 220 kV - STxD)", etc.
+    t = re.sub(r"^S/?E\s+", "", t)          # quita prefijo S/E
+    t = unicodedata.normalize("NFKD", t)
+    t = "".join(c for c in t if not unicodedata.combining(c))
+    return " ".join(t.split()).strip()
+
+
+_SUBESTACIONES_ZONA_LOOKUP = {
+    _normalizar_nombre_se(nombre): gerencia
+    for nombre, gerencia in SUBESTACIONES_GERENCIA_ZONAL.items()
+}
+
+
+def obtener_zona_por_se(se_linea_texto):
+    """Retorna 'Norte'/'Metropolitana'/'Sur' según el listado de subestaciones, o None si no hay match."""
+    clave = _normalizar_nombre_se(se_linea_texto)
+    if not clave:
+        return None
+    if clave in _SUBESTACIONES_ZONA_LOOKUP:
+        return _SUBESTACIONES_ZONA_LOOKUP[clave]
+    # match parcial (por si el texto trae variaciones menores)
+    for k, v in _SUBESTACIONES_ZONA_LOOKUP.items():
+        if clave in k or k in clave:
+            return v
+    return None
 
 
 # =============================================================================
@@ -851,27 +1090,34 @@ async def subir_pt_a_opat(opat_page, datos):
         print(f"  N° PT: {pt_id} → {r}")
         await opat_page.wait_for_timeout(300)
 
-        # ── ZONA → Metropolitana ───────────────────────────────────────────────
+        # ── ZONA (Norte/Metropolitana/Sur, según SUBESTACIONES_GERENCIA_ZONAL) ──
+        zona_valor = obtener_zona_por_se(datos.get("se_linea", "")) or "Metropolitana"
         r = await opat_page.evaluate("""
-        () => {
+        (val) => {
             var modal = document.getElementById('modalEditarPT');
-            var selects = Array.from(modal.querySelectorAll('select'));
-            for (var i=0; i<selects.length; i++) {
-                var opts = Array.from(selects[i].options).map(o => o.text.trim());
-                if (opts.some(o => o.includes('Zona') || o.includes('Metropolitana') || o.includes('Norte') || o.includes('Sur'))) {
-                    for (var j=0; j<selects[i].options.length; j++) {
-                        if (selects[i].options[j].text.trim() === 'Metropolitana') {
-                            selects[i].selectedIndex = j;
-                            selects[i].dispatchEvent(new Event('change', {bubbles:true}));
-                            return 'ok:' + selects[i].id;
-                        }
+            var sel = modal ? modal.querySelector('#modZona') : null;
+            if (!sel) {
+                var selects = Array.from(modal.querySelectorAll('select'));
+                for (var i=0; i<selects.length; i++) {
+                    var opts = Array.from(selects[i].options).map(o => o.text.trim());
+                    if (opts.some(o => o.includes('Zona') || o.includes('Metropolitana') || o.includes('Norte') || o.includes('Sur'))) {
+                        sel = selects[i];
+                        break;
                     }
                 }
             }
-            return 'not_found';
+            if (!sel) return 'not_found';
+            for (var j=0; j<sel.options.length; j++) {
+                if (sel.options[j].text.trim() === val) {
+                    sel.selectedIndex = j;
+                    sel.dispatchEvent(new Event('change', {bubbles:true}));
+                    return 'ok:' + sel.id;
+                }
+            }
+            return 'not_found_option';
         }
-        """)
-        print(f"  Zona: Metropolitana → {r}")
+        """, zona_valor)
+        print(f"  Zona: '{datos.get('se_linea','')}' → {zona_valor} → {r}")
         await opat_page.wait_for_timeout(300)
 
         # ── FECHA INICIO ──────────────────────────────────────────────────────
@@ -1032,37 +1278,22 @@ async def subir_pt_a_opat(opat_page, datos):
 
         # ── PROGRAMADOR (Responsable del caso en Centrality) ─────────────────
         if datos.get("responsable_caso"):
-            r = await opat_page.evaluate(f"""
-            (val) => {{
+            sigla_programador  = obtener_sigla_programador(datos["responsable_caso"])
+            valor_programador  = sigla_programador or datos["responsable_caso"]
+            r = await opat_page.evaluate("""
+            (val) => {
                 var modal = document.getElementById('modalEditarPT');
-                var labels = Array.from(modal.querySelectorAll('label'));
-                for (var i=0; i<labels.length; i++) {{
-                    var lt = (labels[i].innerText || '').trim().toLowerCase();
-                    if (lt.includes('programador')) {{
-                        var forId = labels[i].getAttribute('for');
-                        var el = forId ? document.getElementById(forId) : null;
-                        if (el) {{
-                            el.value = val;
-                            el.dispatchEvent(new Event('input', {{bubbles:true}}));
-                            el.dispatchEvent(new Event('change', {{bubbles:true}}));
-                            return 'ok:' + forId;
-                        }}
-                    }}
-                }}
-                var inputs = Array.from(modal.querySelectorAll('input[type="text"]'));
-                for (var j=0; j<inputs.length; j++) {{
-                    var ph = (inputs[j].placeholder || '').toLowerCase();
-                    if (ph.includes('programador') || ph.includes('nicolas') || ph.includes('nicolás')) {{
-                        inputs[j].value = val;
-                        inputs[j].dispatchEvent(new Event('input', {{bubbles:true}}));
-                        inputs[j].dispatchEvent(new Event('change', {{bubbles:true}}));
-                        return 'fallback_placeholder:' + inputs[j].id;
-                    }}
-                }}
+                var el = modal ? modal.querySelector('#modProgramador') : document.getElementById('modProgramador');
+                if (el) {
+                    el.value = val;
+                    el.dispatchEvent(new Event('input', {bubbles:true}));
+                    el.dispatchEvent(new Event('change', {bubbles:true}));
+                    return 'ok:modProgramador';
+                }
                 return 'not_found';
-            }}
-            """, datos["responsable_caso"])
-            print(f"  Programador: {datos['responsable_caso']} → {r}")
+            }
+            """, valor_programador)
+            print(f"  Programador: {datos['responsable_caso']} → sigla '{sigla_programador}' → valor '{valor_programador}' → {r}")
             await opat_page.wait_for_timeout(300)
 
         # ── COMPONENTES ───────────────────────────────────────────────────────
