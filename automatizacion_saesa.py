@@ -515,6 +515,8 @@ def extraer_info_fila(row):
 
 def determinar_tipo_trabajo(tipo_pt_texto):
     t = (tipo_pt_texto or "").upper()
+    if "SIN CONDICIONES" in t:
+        return "Sin Condiciones"
     if "DESCONEX" in t:
         return "DESCONEXIÓN"
     if "INTERVEN" in t:
@@ -1466,24 +1468,54 @@ async def subir_pt_a_opat(opat_page, datos):
 
         # ── TIPO TRABAJO ──────────────────────────────────────────────────────
         tipo_trabajo = datos.get("tipo_trabajo", "DESCONEXIÓN")
-        r = await opat_page.evaluate(f"""
-        (tipo) => {{
+        r = await opat_page.evaluate("""
+        (tipo) => {
             var modal = document.getElementById('modalEditarPT');
             var selects = Array.from(modal.querySelectorAll('select'));
-            for (var i=0; i<selects.length; i++) {{
+            for (var i=0; i<selects.length; i++) {
                 var opts = Array.from(selects[i].options).map(o => o.text.trim());
-                if (opts.includes('DESCONEXIÓN') || opts.includes('INTERVENCIÓN')) {{
-                    for (var j=0; j<selects[i].options.length; j++) {{
-                        if (selects[i].options[j].text.trim() === tipo) {{
+                var esSelectTipoTrabajo = opts.some(function(o) {
+                    var ou = o.toUpperCase();
+                    return o === 'Sin Condiciones' || ou.indexOf('DESCONEX') === 0 || ou.indexOf('INTERVEN') === 0;
+                });
+                if (!esSelectTipoTrabajo) continue;
+
+                // Caso 'Sin Condiciones': match exacto
+                if (tipo === 'Sin Condiciones') {
+                    for (var j=0; j<selects[i].options.length; j++) {
+                        if (selects[i].options[j].text.trim() === 'Sin Condiciones') {
                             selects[i].selectedIndex = j;
-                            selects[i].dispatchEvent(new Event('change', {{bubbles:true}}));
-                            return 'ok:' + selects[i].id;
-                        }}
-                    }}
-                }}
-            }}
+                            selects[i].dispatchEvent(new Event('change', {bubbles:true}));
+                            return 'ok_sin_condiciones:' + selects[i].id;
+                        }
+                    }
+                    return 'not_found_sin_condiciones';
+                }
+
+                // Caso DESCONEXIÓN/INTERVENCIÓN: las opciones reales son
+                // 'Desconexión (IE)'/'Desconexión (IN)'/'Intervención (IE)'/'Intervención (IN)'.
+                // Por ahora siempre se usa la variante (IN) — instalación normal.
+                var prefijo = (tipo.toUpperCase().indexOf('INTERVEN') === 0) ? 'INTERVEN' : 'DESCONEX';
+                for (var k=0; k<selects[i].options.length; k++) {
+                    var txt = selects[i].options[k].text.trim();
+                    if (txt.toUpperCase().indexOf(prefijo) === 0 && txt.indexOf('(IN)') > -1) {
+                        selects[i].selectedIndex = k;
+                        selects[i].dispatchEvent(new Event('change', {bubbles:true}));
+                        return 'ok_in:' + txt;
+                    }
+                }
+                for (var m=0; m<selects[i].options.length; m++) {
+                    var txt2 = selects[i].options[m].text.trim();
+                    if (txt2.toUpperCase().indexOf(prefijo) === 0) {
+                        selects[i].selectedIndex = m;
+                        selects[i].dispatchEvent(new Event('change', {bubbles:true}));
+                        return 'ok_fallback:' + txt2;
+                    }
+                }
+                return 'not_found_prefijo';
+            }
             return 'not_found';
-        }}
+        }
         """, tipo_trabajo)
         print(f"  Tipo trabajo: {tipo_trabajo} → {r}")
         await opat_page.wait_for_timeout(300)
