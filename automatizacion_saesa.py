@@ -31,7 +31,7 @@ NEOMANTE_PASS = os.environ["NEOMANTE_PASS"]
 GMAIL_USER = os.environ["GMAIL_USER"]
 GMAIL_PASS = os.environ["GMAIL_APP_PASS"]
 EMAIL_DEST = os.environ["EMAIL_DEST"]
-EMAIL_CC   = ["nicolas.lorenzen@saesa.cl", "jorge.canete@saesa.cl", "alexis.aedo@saesa.cl", "ignacio.ligueros@saesa.cl"]
+EMAIL_CC   = ["nicolas.lorenzen@saesa.cl", "jorge.canete@saesa.cl", "alexis.aedo@saesa.cl", "jeanine.valenzuela@saesa.cl"]
 
 DRY_RUN          = os.environ.get("DRY_RUN", "true").lower() == "true"
 MAX_APROBACIONES = int(os.environ.get("MAX_APROBACIONES", "50"))
@@ -327,6 +327,14 @@ JS_NEXT_PAGE = """
 }
 """
 
+JS_FIRST_PAGE = """
+() => {
+    var btn = document.querySelector(".x-tbar-page-first:not(.x-item-disabled)");
+    if (btn) { btn.click(); return true; }
+    return false;
+}
+"""
+
 JS_REFRESH_GRID = """
 () => {
     var btn = document.querySelector(".x-tbar-loading");
@@ -497,6 +505,28 @@ async def esperar_mask_extjs(page, timeout_ms=15000):
         except Exception:
             pass
         await page.wait_for_timeout(500)
+
+
+async def ir_a_primera_pagina(page, frame):
+    """
+    Fuerza que la grilla vuelva a la página 1. Necesario porque al aplicar un
+    filtro nuevo (o reordenar por columna), Centrality puede quedar mostrando la
+    misma posición de paginación en la que había quedado la pasada anterior, en
+    vez de reiniciar desde el principio del resultado nuevo.
+    """
+    r = await frame.evaluate(JS_FIRST_PAGE)
+    await page.wait_for_timeout(1500)
+    await esperar_mask_extjs(page, timeout_ms=8000)
+    info = await frame.evaluate("""
+    () => {
+        const pag = Array.from(document.querySelectorAll("*"))
+            .filter(e => e.children.length===0 && e.offsetParent &&
+                         (e.innerText||"").indexOf("Mostrando")>=0)
+            .map(e => e.innerText.trim());
+        return pag;
+    }
+    """)
+    print(f"  ir a página 1: click={r} | paginador ahora: {info}")
 
 
 def primer_id_pagina(filas):
@@ -813,6 +843,7 @@ async def aplicar_filtro_pcct(page, frame, estado_texto=None, limpiar_primero=Fa
     }
     """)
     print(f"  resultado filtro: {info}")
+    await ir_a_primera_pagina(page, frame)
 
 
 # =============================================================================
@@ -981,6 +1012,7 @@ async def aplicar_filtro_sin_condiciones(page, frame):
     }
     """)
     print(f"  resultado filtro: {info}")
+    await ir_a_primera_pagina(page, frame)
 
 
 # =============================================================================
@@ -1241,8 +1273,10 @@ async def aplicar_filtro_sodi_terceros(page, frame):
     }
     """)
     print(f"  resultado filtro: {info}")
+    await ir_a_primera_pagina(page, frame)
 
     await ordenar_por_fecha_desc(page, frame)
+    await ir_a_primera_pagina(page, frame)
 
 
 async def ordenar_por_fecha_desc(page, frame):
