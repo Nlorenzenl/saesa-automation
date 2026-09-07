@@ -31,7 +31,7 @@ NEOMANTE_PASS = os.environ["NEOMANTE_PASS"]
 GMAIL_USER = os.environ["GMAIL_USER"]
 GMAIL_PASS = os.environ["GMAIL_APP_PASS"]
 EMAIL_DEST = os.environ["EMAIL_DEST"]
-EMAIL_CC   = ["nicolas.lorenzen@saesa.cl", "jorge.canete@saesa.cl", "alexis.aedo@saesa.cl", "jeanine.valenzuela@saesa.cl"]
+EMAIL_CC   = ["nicolas.lorenzen@saesa.cl", "jorge.canete@saesa.cl", "alexis.aedo@saesa.cl", "ignacio.ligueros@saesa.cl"]
 
 DRY_RUN          = os.environ.get("DRY_RUN", "true").lower() == "true"
 MAX_APROBACIONES = int(os.environ.get("MAX_APROBACIONES", "50"))
@@ -555,6 +555,31 @@ def extraer_info_fila(row):
     estado_pt = limpiar_celda(row[id_idx + 6]) if len(row) > id_idx + 6 else ""
 
     return id_pt, area_pt, estado_pt
+
+
+def extraer_fecha_inicio_fila(row):
+    """Extrae el texto de la columna 'Fecha inicio' (id_idx+3), reutilizando la
+    misma detección de columnas de extraer_info_fila. Se usa solo para verificar
+    en qué dirección quedó ordenada la grilla, no para el flujo normal de datos."""
+    id_idx = -1
+    for i, cell in enumerate(row):
+        if re.match(r"^\d{4}-\d{5}$", normalizar(cell)):
+            id_idx = i
+            break
+    if id_idx < 0:
+        return ""
+    return limpiar_celda(row[id_idx + 3]) if len(row) > id_idx + 3 else ""
+
+
+def parsear_fecha_dt(texto):
+    """Parsea 'dd/mm/yyyy[ hh:mm:ss]' a datetime, o None si no se pudo."""
+    texto = normalizar(texto)
+    for fmt in ["%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M", "%d/%m/%Y"]:
+        try:
+            return datetime.strptime(texto, fmt)
+        except ValueError:
+            continue
+    return None
 
 
 def determinar_tipo_trabajo(tipo_pt_texto):
@@ -1216,6 +1241,59 @@ async def aplicar_filtro_sodi_terceros(page, frame):
     }
     """)
     print(f"  resultado filtro: {info}")
+
+    await ordenar_por_fecha_desc(page, frame)
+
+
+async def ordenar_por_fecha_desc(page, frame):
+    """
+    Hace click en el encabezado 'Fecha de inicio' de la grilla para ordenarla por
+    esa columna. Como no sabemos de antemano si el primer click deja el orden
+    ascendente o descendente, se lee la fecha de las 2 primeras filas después del
+    click: si quedó ascendente (más antigua primero), se hace un segundo click
+    para dejarla descendente (más reciente primero) — así los PTs de 2026 caen
+    en la página 1 en vez de quedar al final de años de historial.
+    """
+    r_click = await frame.evaluate("""
+    () => {
+        const headers = Array.from(document.querySelectorAll(".x-grid3-hd, .x-grid3-hd-inner"));
+        for (const h of headers) {
+            const t = (h.innerText || h.textContent || "").trim();
+            if (t.indexOf("Fecha de inicio") === 0) { h.click(); return {ok:true}; }
+        }
+        return {ok:false, msg:"No encontré encabezado 'Fecha de inicio'"};
+    }
+    """)
+    print(f"  ordenar por 'Fecha de inicio' (1er click): {r_click}")
+    if not r_click.get("ok"):
+        return
+    await page.wait_for_timeout(1500)
+    await esperar_mask_extjs(page, timeout_ms=8000)
+
+    filas = await frame.evaluate(JS_READ_ROWS)
+    fechas = [parsear_fecha_dt(extraer_fecha_inicio_fila(row)) for row in filas[:3] if row]
+    fechas = [f for f in fechas if f is not None]
+    print(f"    [DIAG] primeras fechas tras 1er click: {fechas}")
+
+    if len(fechas) >= 2 and fechas[0] < fechas[-1]:
+        print("    orden quedó ascendente, haciendo 2do click para dejar descendente...")
+        await frame.evaluate("""
+        () => {
+            const headers = Array.from(document.querySelectorAll(".x-grid3-hd, .x-grid3-hd-inner"));
+            for (const h of headers) {
+                const t = (h.innerText || h.textContent || "").trim();
+                if (t.indexOf("Fecha de inicio") === 0) { h.click(); return; }
+            }
+        }
+        """)
+        await page.wait_for_timeout(1500)
+        await esperar_mask_extjs(page, timeout_ms=8000)
+        filas2 = await frame.evaluate(JS_READ_ROWS)
+        fechas2 = [parsear_fecha_dt(extraer_fecha_inicio_fila(row)) for row in filas2[:3] if row]
+        fechas2 = [f for f in fechas2 if f is not None]
+        print(f"    [DIAG] primeras fechas tras 2do click: {fechas2}")
+    else:
+        print("    orden ya quedó descendente (más reciente primero)")
 
 
 # =============================================================================
