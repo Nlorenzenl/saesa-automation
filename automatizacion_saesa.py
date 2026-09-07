@@ -31,7 +31,7 @@ NEOMANTE_PASS = os.environ["NEOMANTE_PASS"]
 GMAIL_USER = os.environ["GMAIL_USER"]
 GMAIL_PASS = os.environ["GMAIL_APP_PASS"]
 EMAIL_DEST = os.environ["EMAIL_DEST"]
-EMAIL_CC   = ["nicolas.lorenzen@saesa.cl", "jorge.canete@saesa.cl", "alexis.aedo@saesa.cl", "ignacio.ligueros@saesa.cl", "jeanine.valenzuela@saesa.cl"]
+EMAIL_CC   = ["nicolas.lorenzen@saesa.cl", "jorge.canete@saesa.cl", "alexis.aedo@saesa.cl", "jeanine.valenzuela@saesa.cl"]
 
 DRY_RUN          = os.environ.get("DRY_RUN", "true").lower() == "true"
 MAX_APROBACIONES = int(os.environ.get("MAX_APROBACIONES", "50"))
@@ -466,6 +466,44 @@ async def screenshot(page, nombre):
     return path
 
 
+async def esperar_mask_extjs(page, timeout_ms=15000):
+    """
+    Espera a que desaparezca cualquier mask de carga de ExtJS (.ext-el-mask) que
+    pueda estar bloqueando clicks. Si sigue presente tras el timeout, lo remueve
+    a la fuerza vía JS para no quedar atascado indefinidamente.
+    """
+    try:
+        await page.wait_for_function(
+            """() => {
+                var m = document.querySelector('.ext-el-mask');
+                return !m || m.offsetParent === null;
+            }""",
+            timeout=timeout_ms
+        )
+    except Exception:
+        print("    ADVERTENCIA: mask de ExtJS no desapareció a tiempo, forzando remoción")
+        try:
+            await page.evaluate("""
+            () => {
+                document.querySelectorAll('.ext-el-mask, .ext-el-mask-msg').forEach(function(el) { el.remove(); });
+            }
+            """)
+        except Exception:
+            pass
+        await page.wait_for_timeout(500)
+
+
+def primer_id_pagina(filas):
+    """Retorna el primer Id de PT válido encontrado en las filas leídas de una página."""
+    for row in filas:
+        if not row:
+            continue
+        id_pt, _, _ = extraer_info_fila(row)
+        if id_pt:
+            return id_pt
+    return None
+
+
 def normalizar(txt):
     return " ".join((txt or "").strip().split())
 
@@ -517,6 +555,8 @@ def determinar_tipo_trabajo(tipo_pt_texto):
     t = (tipo_pt_texto or "").upper()
     if "SIN CONDICIONES" in t:
         return "Sin Condiciones"
+    if "SODI TERCEROS" in t:
+        return "Sodi Terceros"
     if "DESCONEX" in t:
         return "DESCONEXIÓN"
     if "INTERVEN" in t:
@@ -616,6 +656,7 @@ async def aplicar_filtro_pcct(page, frame, estado_texto=None, limpiar_primero=Fa
     if estado_texto is None:
         estado_texto = ESTADO_EXACTO
     print(f"\n[3] FILTRO — {estado_texto}")
+    await esperar_mask_extjs(page)
     await frame.click('text=Filtro')
     await page.wait_for_timeout(2000)
 
@@ -814,6 +855,7 @@ ESTADO_APROBADA = "Aprobada"
 
 async def aplicar_filtro_sin_condiciones(page, frame):
     print(f"\n[3] FILTRO — Tipo de permiso: {TIPO_PERMISO_SIN_CONDICIONES} / Estado: {ESTADO_APROBADA}")
+    await esperar_mask_extjs(page)
     await frame.click('text=Filtro')
     await page.wait_for_timeout(2000)
 
@@ -932,6 +974,7 @@ async def procesar_sin_condiciones(page, frame, opat_page):
     paginas = min(total_paginas, 20)
     print(f"  Total páginas: {total_paginas}")
 
+    id_pagina_anterior = None
     for pagina in range(1, paginas + 1):
         print(f"\n  ── Página {pagina}/{paginas} ──")
         await page.wait_for_timeout(1500)
@@ -939,15 +982,20 @@ async def procesar_sin_condiciones(page, frame, opat_page):
         filas = await frame.evaluate(JS_READ_ROWS)
         print(f"  Filas leídas: {len(filas)}")
 
+        id_actual_pagina = primer_id_pagina(filas)
+        if pagina > 1 and id_actual_pagina is not None and id_actual_pagina == id_pagina_anterior:
+            print(f"    ADVERTENCIA: la página no avanzó (mismo primer PT {id_actual_pagina}). Reintentando...")
+            await esperar_mask_extjs(page)
+            await frame.evaluate(JS_REFRESH_GRID)
+            await page.wait_for_timeout(3000)
+            filas = await frame.evaluate(JS_READ_ROWS)
+            id_actual_pagina = primer_id_pagina(filas)
+            if id_actual_pagina == id_pagina_anterior:
+                print("    ADVERTENCIA: la paginación sigue atascada, se corta esta pasada aquí para evitar bucle infinito.")
+                break
+        id_pagina_anterior = id_actual_pagina
+
         pts_esta_pagina = []
-        for row in filas:
-            if not row:
-                continue
-            id_pt, area_pt, estado_pt = extraer_info_fila(row)
-            if not id_pt:
-                continue
-            pts_esta_pagina.append({"id": id_pt, "area": area_pt, "estado": estado_pt})
-            print(f"    [CANDIDATO OPAT] {id_pt} | {area_pt}")
 
         for pt in pts_esta_pagina:
             if len(pts_agregados) >= MAX_APROBACIONES:
@@ -1007,9 +1055,256 @@ async def procesar_sin_condiciones(page, frame, opat_page):
     return pts_agregados, pts_fallidos, pts_omitidos
 
 
+# =============================================================================
+# FILTRO SODI TERCEROS (Inicio disponibilidad desde 01/08/2026, todos los Estados)
+# =============================================================================
+
+FECHA_DESDE_SODI_TERCEROS  = "01/08/2026"
+TIPO_PERMISO_SODI_TERCEROS = "SODI TERCEROS"
+
+
+async def set_campo_fecha_filtro(frame, label_texto, valor):
+    """Escribe un valor de fecha (dd/mm/yyyy) en el input de texto asociado a un
+    label del panel de Filtros (ej. 'Inicio de disponibilidad desde:')."""
+    return await frame.evaluate("""
+    (labelBuscado, valor) => {
+        const win = Array.from(document.querySelectorAll(".x-window"))
+            .filter(w => w.offsetParent && (w.innerText || "").includes("Filtros"))[0];
+        if (!win) return {ok:false, msg:"No encontré ventana Filtros"};
+        const labels = Array.from(win.querySelectorAll("label,td,div,span"))
+            .filter(el => el.offsetParent);
+        let target = null;
+        for (const el of labels) {
+            if ((el.innerText || "").trim().indexOf(labelBuscado) === 0) { target = el; break; }
+        }
+        if (!target) return {ok:false, msg:"No encontré label " + labelBuscado};
+        const tr = target.closest("tr") || win;
+        const inputs = Array.from(tr.querySelectorAll('input[type="text"]'));
+        if (inputs.length === 0) return {ok:false, msg:"No encontré input de fecha"};
+        const inp = inputs[0];
+        inp.value = valor;
+        inp.dispatchEvent(new Event('input', {bubbles:true}));
+        inp.dispatchEvent(new Event('change', {bubbles:true}));
+        inp.dispatchEvent(new Event('blur', {bubbles:true}));
+        return {ok:true, id: inp.id};
+    }
+    """, label_texto, valor)
+
+
+async def aplicar_filtro_sodi_terceros(page, frame):
+    print(f"\n[3] FILTRO — Tipo de permiso: {TIPO_PERMISO_SODI_TERCEROS} / Inicio disponibilidad desde: {FECHA_DESDE_SODI_TERCEROS}")
+    await esperar_mask_extjs(page)
+    await frame.click('text=Filtro')
+    await page.wait_for_timeout(2000)
+
+    # 1. Limpiar filtros previos
+    r_limpiar = await frame.evaluate("""
+    () => {
+        const win = Array.from(document.querySelectorAll(".x-window"))
+            .filter(w => w.offsetParent && (w.innerText || "").includes("Filtros"))[0];
+        if (!win) return {ok:false, msg:"No encontré ventana Filtros"};
+        const btns = Array.from(win.querySelectorAll("button, a, .x-btn"));
+        for (const b of btns) {
+            const t = (b.innerText || b.textContent || "").trim();
+            if (t === "Limpiar") { b.click(); return {ok:true}; }
+        }
+        return {ok:false, msg:"Botón Limpiar no encontrado"};
+    }
+    """)
+    print(f"  limpiar previo: {r_limpiar}")
+    await page.wait_for_timeout(1500)
+
+    # 2. Desmarcar 'En bandeja de trabajo'
+    r_checkbox = await frame.evaluate("""
+    () => {
+        const win = Array.from(document.querySelectorAll(".x-window"))
+            .filter(w => w.offsetParent && (w.innerText || "").includes("Filtros"))[0];
+        if (!win) return {ok:false, msg:"No encontré ventana Filtros"};
+        const labels = Array.from(win.querySelectorAll("label,td,div,span"))
+            .filter(el => el.offsetParent);
+        let target = null;
+        for (const el of labels) {
+            if ((el.innerText || "").trim().indexOf("En bandeja de trabajo") === 0) { target = el; break; }
+        }
+        if (!target) return {ok:false, msg:"No encontré label 'En bandeja de trabajo'"};
+        const tr = target.closest("tr") || win;
+        const cb = tr.querySelector('input[type="checkbox"]');
+        if (!cb) return {ok:false, msg:"No encontré checkbox"};
+        if (cb.checked) { cb.click(); }
+        return {ok:true, checked: cb.checked};
+    }
+    """)
+    print(f"  desmarcar 'En bandeja de trabajo': {r_checkbox}")
+    await page.wait_for_timeout(800)
+
+    # 3. Inicio de disponibilidad desde → 01/08/2026
+    r_fecha = await set_campo_fecha_filtro(frame, "Inicio de disponibilidad desde", FECHA_DESDE_SODI_TERCEROS)
+    print(f"  Inicio de disponibilidad desde: {FECHA_DESDE_SODI_TERCEROS} → {r_fecha}")
+    await page.wait_for_timeout(500)
+
+    # 4. Tipo de permiso de trabajo → SODI TERCEROS
+    r_tipo_trigger = await abrir_combo_filtro(frame, "Tipo de permiso de trabajo:")
+    print(f"  trigger Tipo de permiso: {r_tipo_trigger}")
+    if not r_tipo_trigger.get("ok"):
+        raise RuntimeError(f"No se pudo abrir combo Tipo de permiso de trabajo: {r_tipo_trigger}")
+    await page.wait_for_timeout(1500)
+    r_tipo_pick = await seleccionar_item_combo(frame, TIPO_PERMISO_SODI_TERCEROS)
+    print(f"  selección Tipo de permiso: {r_tipo_pick}")
+    if not r_tipo_pick.get("ok"):
+        raise RuntimeError(f"No se pudo seleccionar Tipo de permiso {TIPO_PERMISO_SODI_TERCEROS!r}: {r_tipo_pick}")
+    await page.wait_for_timeout(1000)
+
+    # 5. Aplicar (Estado se deja vacío — cualquier estado)
+    aplicar_btn = frame.locator("button.x-btn-text.apply", has_text="Aplicar").first
+    await aplicar_btn.click(timeout=5000, force=True)
+    await page.wait_for_timeout(8000)
+
+    filtro_abierto = await frame.evaluate("""
+    () => {
+        const win = Array.from(document.querySelectorAll(".x-window"))
+            .filter(w => w.offsetParent && (w.innerText || "").includes("Filtros"))[0];
+        return !!win;
+    }
+    """)
+    if filtro_abierto:
+        await aplicar_btn.dblclick(timeout=5000, force=True)
+        await page.wait_for_timeout(8000)
+
+    info = await frame.evaluate("""
+    () => {
+        const rows = document.querySelectorAll(".x-grid3-row");
+        const pag = Array.from(document.querySelectorAll("*"))
+            .filter(e => e.children.length===0 && e.offsetParent &&
+                         (e.innerText||"").indexOf("Mostrando")>=0)
+            .map(e => e.innerText.trim());
+        return {filas: rows.length, paginador: pag};
+    }
+    """)
+    print(f"  resultado filtro: {info}")
+
+
+# =============================================================================
+# PROCESAR PTs "SODI TERCEROS" (excluye Metropolitana) → SOLO OPAT
+# =============================================================================
+
+async def procesar_sodi_terceros(page, frame, opat_page):
+    """
+    Igual que procesar_esperando_activacion: excluye Área Zonal Metropolitana
+    (esas ya se agregan por otra vía), y para el resto verifica si ya existe en
+    OPAT; si no existe, lee el detalle y lo sube. No aprueba nada en Centrality.
+    """
+    print(f"\n[5-ST] Procesando PTs '{TIPO_PERMISO_SODI_TERCEROS}' desde {FECHA_DESDE_SODI_TERCEROS} (excluye Metropolitana → solo OPAT)")
+    print(f"  DRY_RUN: {DRY_RUN}")
+
+    pts_agregados = []
+    pts_fallidos  = []
+    pts_omitidos  = []
+
+    total_paginas = await frame.evaluate(JS_GET_TOTAL_PAGES)
+    paginas = min(total_paginas, 20)
+    print(f"  Total páginas: {total_paginas}")
+
+    id_pagina_anterior = None
+    for pagina in range(1, paginas + 1):
+        print(f"\n  ── Página {pagina}/{paginas} ──")
+        await page.wait_for_timeout(1500)
+
+        filas = await frame.evaluate(JS_READ_ROWS)
+        print(f"  Filas leídas: {len(filas)}")
+
+        id_actual_pagina = primer_id_pagina(filas)
+        if pagina > 1 and id_actual_pagina is not None and id_actual_pagina == id_pagina_anterior:
+            print(f"    ADVERTENCIA: la página no avanzó (mismo primer PT {id_actual_pagina}). Reintentando...")
+            await esperar_mask_extjs(page)
+            await frame.evaluate(JS_REFRESH_GRID)
+            await page.wait_for_timeout(3000)
+            filas = await frame.evaluate(JS_READ_ROWS)
+            id_actual_pagina = primer_id_pagina(filas)
+            if id_actual_pagina == id_pagina_anterior:
+                print("    ADVERTENCIA: la paginación sigue atascada, se corta esta pasada aquí para evitar bucle infinito.")
+                break
+        id_pagina_anterior = id_actual_pagina
+
+        pts_esta_pagina = []
+        for row in filas:
+            if not row:
+                continue
+            id_pt, area_pt, estado_pt = extraer_info_fila(row)
+            if not id_pt:
+                continue
+            if es_metropolitana(area_pt):
+                pts_omitidos.append({
+                    "id": id_pt,
+                    "area": area_pt or "Sin área",
+                    "motivo": "Área Zonal Metropolitana"
+                })
+                print(f"    [OMITIR METROPOLITANA] {id_pt} | {area_pt}")
+                continue
+            pts_esta_pagina.append({"id": id_pt, "area": area_pt, "estado": estado_pt})
+            print(f"    [CANDIDATO OPAT] {id_pt} | {area_pt}")
+
+        for pt in pts_esta_pagina:
+            if len(pts_agregados) >= MAX_APROBACIONES:
+                print("    LÍMITE DE SEGURIDAD ALCANZADO")
+                return pts_agregados, pts_fallidos, pts_omitidos
+
+            print(f"\n    >> Procesando {pt['id']} ({pt['area']})")
+
+            try:
+                if DRY_RUN:
+                    print(f"    [DRY RUN] {pt['id']}")
+                    pts_agregados.append({
+                        "id": pt["id"], "area": pt["area"],
+                        "opat": False, "opat_dry": True, "tipo_flujo": "ST"
+                    })
+                    continue
+
+                existe = await existe_pt_en_opat(opat_page, pt["id"])
+                if existe:
+                    pts_omitidos.append({
+                        "id": pt["id"], "area": pt["area"],
+                        "motivo": "Ya existe en agenda OPAT"
+                    })
+                    print(f"    [OMITIR YA EN OPAT] {pt['id']}")
+                    continue
+                if existe is None:
+                    print(f"    ADVERTENCIA: no se pudo confirmar existencia en OPAT para {pt['id']}, se intentará agregar igualmente")
+
+                datos_opat = await leer_detalle_pt(page, frame, pt["id"])
+                if not datos_opat:
+                    pts_fallidos.append(f"{pt['id']} - no se pudo leer detalle en Centrality")
+                    continue
+
+                opat_ok = await subir_pt_a_opat(opat_page, datos_opat)
+
+                pts_agregados.append({
+                    "id":   pt["id"],
+                    "area": pt["area"],
+                    "opat": opat_ok,
+                    "tipo_flujo": "ST",
+                })
+
+            except Exception as e:
+                msg = str(e)[:250]
+                pts_fallidos.append(f"{pt['id']} - {msg}")
+                print(f"    EXCEPCIÓN: {msg}")
+
+        if len(pts_agregados) >= MAX_APROBACIONES:
+            break
+
+        if pagina < paginas:
+            sig = await frame.evaluate(JS_NEXT_PAGE)
+            if not sig:
+                break
+            await page.wait_for_timeout(4000)
+
+    return pts_agregados, pts_fallidos, pts_omitidos
+
+
 async def limpiar_filtro_pcct(page, frame):
     """Abre el panel de filtros y limpia el campo Estado, luego aplica."""
     print("\n[FILTRO] Limpiando filtro Estado...")
+    await esperar_mask_extjs(page)
     await frame.click('text=Filtro')
     await page.wait_for_timeout(2000)
 
@@ -1476,20 +1771,20 @@ async def subir_pt_a_opat(opat_page, datos):
                 var opts = Array.from(selects[i].options).map(o => o.text.trim());
                 var esSelectTipoTrabajo = opts.some(function(o) {
                     var ou = o.toUpperCase();
-                    return o === 'Sin Condiciones' || ou.indexOf('DESCONEX') === 0 || ou.indexOf('INTERVEN') === 0;
+                    return o === 'Sin Condiciones' || o === 'Sodi Terceros' || ou.indexOf('DESCONEX') === 0 || ou.indexOf('INTERVEN') === 0;
                 });
                 if (!esSelectTipoTrabajo) continue;
 
-                // Caso 'Sin Condiciones': match exacto
-                if (tipo === 'Sin Condiciones') {
+                // Caso 'Sin Condiciones' / 'Sodi Terceros': match exacto
+                if (tipo === 'Sin Condiciones' || tipo === 'Sodi Terceros') {
                     for (var j=0; j<selects[i].options.length; j++) {
-                        if (selects[i].options[j].text.trim() === 'Sin Condiciones') {
+                        if (selects[i].options[j].text.trim() === tipo) {
                             selects[i].selectedIndex = j;
                             selects[i].dispatchEvent(new Event('change', {bubbles:true}));
-                            return 'ok_sin_condiciones:' + selects[i].id;
+                            return 'ok_exacto:' + selects[i].id;
                         }
                     }
-                    return 'not_found_sin_condiciones';
+                    return 'not_found_exacto';
                 }
 
                 // Caso DESCONEXIÓN/INTERVENCIÓN: las opciones reales son
@@ -1709,12 +2004,26 @@ async def aprobar_pts(page, frame, opat_page, neo_page, tipo_flujo="PCCT"):
     paginas = min(total_paginas, 20)
     print(f"  Total páginas: {total_paginas}")
 
+    id_pagina_anterior = None
     for pagina in range(1, paginas + 1):
         print(f"\n  ── Página {pagina}/{paginas} ──")
         await page.wait_for_timeout(1500)
 
         filas = await frame.evaluate(JS_READ_ROWS)
         print(f"  Filas leídas: {len(filas)}")
+
+        id_actual_pagina = primer_id_pagina(filas)
+        if pagina > 1 and id_actual_pagina is not None and id_actual_pagina == id_pagina_anterior:
+            print(f"    ADVERTENCIA: la página no avanzó (mismo primer PT {id_actual_pagina}). Reintentando...")
+            await esperar_mask_extjs(page)
+            await frame.evaluate(JS_REFRESH_GRID)
+            await page.wait_for_timeout(3000)
+            filas = await frame.evaluate(JS_READ_ROWS)
+            id_actual_pagina = primer_id_pagina(filas)
+            if id_actual_pagina == id_pagina_anterior:
+                print("    ADVERTENCIA: la paginación sigue atascada, se corta esta pasada aquí para evitar bucle infinito.")
+                break
+        id_pagina_anterior = id_actual_pagina
 
         pts_esta_pagina = []
         for row in filas:
@@ -1941,12 +2250,26 @@ async def procesar_esperando_activacion(page, frame, opat_page):
     paginas = min(total_paginas, 20)
     print(f"  Total páginas: {total_paginas}")
 
+    id_pagina_anterior = None
     for pagina in range(1, paginas + 1):
         print(f"\n  ── Página {pagina}/{paginas} ──")
         await page.wait_for_timeout(1500)
 
         filas = await frame.evaluate(JS_READ_ROWS)
         print(f"  Filas leídas: {len(filas)}")
+
+        id_actual_pagina = primer_id_pagina(filas)
+        if pagina > 1 and id_actual_pagina is not None and id_actual_pagina == id_pagina_anterior:
+            print(f"    ADVERTENCIA: la página no avanzó (mismo primer PT {id_actual_pagina}). Reintentando...")
+            await esperar_mask_extjs(page)
+            await frame.evaluate(JS_REFRESH_GRID)
+            await page.wait_for_timeout(3000)
+            filas = await frame.evaluate(JS_READ_ROWS)
+            id_actual_pagina = primer_id_pagina(filas)
+            if id_actual_pagina == id_pagina_anterior:
+                print("    ADVERTENCIA: la paginación sigue atascada, se corta esta pasada aquí para evitar bucle infinito.")
+                break
+        id_pagina_anterior = id_actual_pagina
 
         pts_esta_pagina = []
         for row in filas:
@@ -2837,6 +3160,7 @@ async def crear_aviso_cen(neo_page, datos):
 def enviar_reporte(pts_aprobados, pts_fallidos, pts_omitidos,
                     pts_ea_agregados=None, pts_ea_fallidos=None, pts_ea_omitidos=None,
                     pts_sc_agregados=None, pts_sc_fallidos=None, pts_sc_omitidos=None,
+                    pts_st_agregados=None, pts_st_fallidos=None, pts_st_omitidos=None,
                     error_critico=None):
     pts_ea_agregados = pts_ea_agregados or []
     pts_ea_fallidos  = pts_ea_fallidos  or []
@@ -2844,6 +3168,9 @@ def enviar_reporte(pts_aprobados, pts_fallidos, pts_omitidos,
     pts_sc_agregados = pts_sc_agregados or []
     pts_sc_fallidos  = pts_sc_fallidos  or []
     pts_sc_omitidos  = pts_sc_omitidos  or []
+    pts_st_agregados = pts_st_agregados or []
+    pts_st_fallidos  = pts_st_fallidos  or []
+    pts_st_omitidos  = pts_st_omitidos  or []
 
     ahora_chile = datetime.now(TZ_CHILE)
     fecha       = ahora_chile.strftime("%d/%m/%Y")
@@ -3020,6 +3347,15 @@ def enviar_reporte(pts_aprobados, pts_fallidos, pts_omitidos,
         + "<tr style='background:#f6f6f6'><th></th><th>PT</th><th>Área de cobertura</th><th>Motivo</th></tr>"
         + filas_omitidos_lista(pts_sc_omitidos)
         + "</table>"
+        + "<hr style='margin:28px 0;border:none;border-top:1px solid #ddd'>"
+        + tabla_ea(pts_st_agregados, "&#128230; PTs Agregados a OPAT — SODI Terceros")
+        + f"<h3 style='color:#cc0000;margin:20px 0 8px'>SODI Terceros — Errores ({len(pts_st_fallidos)})</h3>"
+        + f"<table style='border-collapse:collapse;width:100%'>{filas_fallidos_lista(pts_st_fallidos)}</table>"
+        + f"<h3 style='color:#888;margin:20px 0 8px'>SODI Terceros — Omitidos ({len(pts_st_omitidos)})</h3>"
+        + "<table style='border-collapse:collapse;width:100%'>"
+        + "<tr style='background:#f6f6f6'><th></th><th>PT</th><th>Área de cobertura</th><th>Motivo</th></tr>"
+        + filas_omitidos_lista(pts_st_omitidos)
+        + "</table>"
         + "</div></body></html>"
     )
 
@@ -3032,8 +3368,9 @@ def enviar_reporte(pts_aprobados, pts_fallidos, pts_omitidos,
             f" | FP: {total_fp} aprobados"
             f" | EA→OPAT: {len(pts_ea_agregados)} agregados"
             f" | SC→OPAT: {len(pts_sc_agregados)} agregados"
-            f" | {total_fallidos + len(pts_ea_fallidos) + len(pts_sc_fallidos)} errores"
-            f" | {total_omitidos + len(pts_ea_omitidos) + len(pts_sc_omitidos)} omitidos"
+            f" | ST→OPAT: {len(pts_st_agregados)} agregados"
+            f" | {total_fallidos + len(pts_ea_fallidos) + len(pts_sc_fallidos) + len(pts_st_fallidos)} errores"
+            f" | {total_omitidos + len(pts_ea_omitidos) + len(pts_sc_omitidos) + len(pts_st_omitidos)} omitidos"
         )
 
     todos = [EMAIL_DEST] + EMAIL_CC
@@ -3069,6 +3406,9 @@ async def main():
     pts_sc_agregados = []
     pts_sc_fallidos  = []
     pts_sc_omitidos  = []
+    pts_st_agregados = []
+    pts_st_fallidos  = []
+    pts_st_omitidos  = []
     error_critico = None
 
     async with async_playwright() as p:
@@ -3149,6 +3489,15 @@ async def main():
                 page_centrality, frame, page_opat
             )
 
+            # ── PASADA 5: SODI Terceros desde 01/08/2026 ─────────────────────
+            print("\n" + "="*65)
+            print("  PASADA 5: SODI Terceros → agregar a OPAT")
+            print("="*65)
+            await aplicar_filtro_sodi_terceros(page_centrality, frame)
+            pts_st_agregados, pts_st_fallidos, pts_st_omitidos = await procesar_sodi_terceros(
+                page_centrality, frame, page_opat
+            )
+
         except Exception as e:
             error_critico = str(e)
             print(f"\nERROR CRÍTICO: {e}")
@@ -3164,12 +3513,14 @@ async def main():
     print(f"  {len(pts_aprobados)} aprobados | {len(pts_fallidos)} errores | {len(pts_omitidos)} omitidos")
     print(f"  {len(pts_ea_agregados)} agregados a OPAT (EA) | {len(pts_ea_fallidos)} errores | {len(pts_ea_omitidos)} omitidos")
     print(f"  {len(pts_sc_agregados)} agregados a OPAT (SC) | {len(pts_sc_fallidos)} errores | {len(pts_sc_omitidos)} omitidos")
+    print(f"  {len(pts_st_agregados)} agregados a OPAT (ST) | {len(pts_st_fallidos)} errores | {len(pts_st_omitidos)} omitidos")
     print(f"{sep}")
 
     enviar_reporte(
         pts_aprobados, pts_fallidos, pts_omitidos,
         pts_ea_agregados, pts_ea_fallidos, pts_ea_omitidos,
         pts_sc_agregados, pts_sc_fallidos, pts_sc_omitidos,
+        pts_st_agregados, pts_st_fallidos, pts_st_omitidos,
         error_critico
     )
     print("Fin.\n")
