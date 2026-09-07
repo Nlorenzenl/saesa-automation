@@ -31,7 +31,7 @@ NEOMANTE_PASS = os.environ["NEOMANTE_PASS"]
 GMAIL_USER = os.environ["GMAIL_USER"]
 GMAIL_PASS = os.environ["GMAIL_APP_PASS"]
 EMAIL_DEST = os.environ["EMAIL_DEST"]
-EMAIL_CC   = ["nicolas.lorenzen@saesa.cl", "jorge.canete@saesa.cl", "alexis.aedo@saesa.cl", "jeanine.valenzuela@saesa.cl"]
+EMAIL_CC   = ["nicolas.lorenzen@saesa.cl", "jorge.canete@saesa.cl", "alexis.aedo@saesa.cl", "ignacio.ligueros@saesa.cl"]
 
 DRY_RUN          = os.environ.get("DRY_RUN", "true").lower() == "true"
 MAX_APROBACIONES = int(os.environ.get("MAX_APROBACIONES", "50"))
@@ -1075,7 +1075,7 @@ async def set_campo_fecha_filtro(frame, label_texto, valor):
     """Escribe un valor de fecha (dd/mm/yyyy) en el input de texto asociado a un
     label del panel de Filtros (ej. 'Inicio de disponibilidad desde:')."""
     return await frame.evaluate("""
-    (labelBuscado, valor) => {
+    ([labelBuscado, valor]) => {
         const win = Array.from(document.querySelectorAll(".x-window"))
             .filter(w => w.offsetParent && (w.innerText || "").includes("Filtros"))[0];
         if (!win) return {ok:false, msg:"No encontré ventana Filtros"};
@@ -1096,7 +1096,7 @@ async def set_campo_fecha_filtro(frame, label_texto, valor):
         inp.dispatchEvent(new Event('blur', {bubbles:true}));
         return {ok:true, id: inp.id};
     }
-    """, label_texto, valor)
+    """, [label_texto, valor])
 
 
 async def aplicar_filtro_sodi_terceros(page, frame):
