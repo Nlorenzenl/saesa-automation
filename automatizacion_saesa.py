@@ -469,14 +469,20 @@ async def screenshot(page, nombre):
 async def esperar_mask_extjs(page, timeout_ms=15000):
     """
     Espera a que desaparezca cualquier mask de carga de ExtJS (.ext-el-mask) que
-    pueda estar bloqueando clicks. Si sigue presente tras el timeout, lo remueve
-    a la fuerza vía JS para no quedar atascado indefinidamente.
+    pueda estar bloqueando clicks. ExtJS puede dejar varios masks en el DOM (unos
+    viejos ya ocultos y uno nuevo activo), así que se revisan TODOS, no solo el
+    primero — querySelector() solo agarraba el primero y podía dar falso "libre"
+    mientras otro mask más nuevo seguía bloqueando. Si sigue presente tras el
+    timeout, se remueven a la fuerza vía JS para no quedar atascado indefinidamente.
     """
     try:
         await page.wait_for_function(
             """() => {
-                var m = document.querySelector('.ext-el-mask');
-                return !m || m.offsetParent === null;
+                var masks = document.querySelectorAll('.ext-el-mask');
+                for (var i=0; i<masks.length; i++) {
+                    if (masks[i].offsetParent !== null) return false;
+                }
+                return true;
             }""",
             timeout=timeout_ms
         )
@@ -1050,7 +1056,9 @@ async def procesar_sin_condiciones(page, frame, opat_page):
             sig = await frame.evaluate(JS_NEXT_PAGE)
             if not sig:
                 break
-            await page.wait_for_timeout(4000)
+            await page.wait_for_timeout(1500)
+            await esperar_mask_extjs(page, timeout_ms=8000)
+            await page.wait_for_timeout(2500)
 
     return pts_agregados, pts_fallidos, pts_omitidos
 
@@ -1296,7 +1304,9 @@ async def procesar_sodi_terceros(page, frame, opat_page):
             sig = await frame.evaluate(JS_NEXT_PAGE)
             if not sig:
                 break
-            await page.wait_for_timeout(4000)
+            await page.wait_for_timeout(1500)
+            await esperar_mask_extjs(page, timeout_ms=8000)
+            await page.wait_for_timeout(2500)
 
     return pts_agregados, pts_fallidos, pts_omitidos
 
@@ -2221,7 +2231,9 @@ async def aprobar_pts(page, frame, opat_page, neo_page, tipo_flujo="PCCT"):
             sig = await frame.evaluate(JS_NEXT_PAGE)
             if not sig:
                 break
-            await page.wait_for_timeout(4000)
+            await page.wait_for_timeout(1500)
+            await esperar_mask_extjs(page, timeout_ms=8000)
+            await page.wait_for_timeout(2500)
 
     await screenshot(page, "final")
     return pts_aprobados, pts_fallidos, pts_omitidos
@@ -2345,7 +2357,9 @@ async def procesar_esperando_activacion(page, frame, opat_page):
             sig = await frame.evaluate(JS_NEXT_PAGE)
             if not sig:
                 break
-            await page.wait_for_timeout(4000)
+            await page.wait_for_timeout(1500)
+            await esperar_mask_extjs(page, timeout_ms=8000)
+            await page.wait_for_timeout(2500)
 
     return pts_agregados, pts_fallidos, pts_omitidos
 
