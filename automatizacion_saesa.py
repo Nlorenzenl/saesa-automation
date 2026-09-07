@@ -3404,6 +3404,31 @@ def enviar_reporte(pts_aprobados, pts_fallidos, pts_omitidos,
         print(f"  Error enviando correo: {e}")
 
 
+async def recuperar_sesion_centrality(page):
+    """
+    Recarga la página de Centrality y vuelve a navegar hasta 'Permisos de trabajo'.
+    Se usa cuando una pasada queda atascada por un mask de ExtJS que no suelta aunque
+    se remueva del DOM — señal de que la petición AJAX de fondo nunca respondió y solo
+    un reload completo puede destrabar la sesión. Si el reload deja la sesión
+    deslogueada, se reautentica antes de renavegar.
+    """
+    print("    Intentando recuperar sesión de Centrality (reload + re-navegación)...")
+    try:
+        await page.reload(wait_until="domcontentloaded", timeout=60_000)
+    except Exception as e:
+        print(f"    ADVERTENCIA: reload de Centrality falló: {e}")
+    await page.wait_for_timeout(3000)
+
+    necesita_login = await page.evaluate("""
+    () => !!document.querySelector('input[name="user"], input[name="pass"]')
+    """)
+    if necesita_login:
+        print("    Sesión perdida tras el reload, reautenticando...")
+        await hacer_login_centrality(page)
+
+    return await navegar_a_permisos(page)
+
+
 async def main():
     sep = "=" * 65
     print(f"\n{sep}")
@@ -3462,55 +3487,101 @@ async def main():
 
             frame = await navegar_a_permisos(page_centrality)
 
+            async def ejecutar_pasada(nombre, accion_fn):
+                """
+                Ejecuta una pasada. Si falla, intenta recuperar la sesión de Centrality
+                (reload + re-navegación) y reintenta una vez. Si vuelve a fallar, la
+                pasada queda vacía pero el run continúa con las siguientes pasadas en
+                vez de abortar todo.
+                """
+                nonlocal frame
+                try:
+                    return await accion_fn(frame)
+                except Exception as e:
+                    print(f"\n  ERROR en {nombre}: {e}")
+                    try:
+                        await screenshot(page_centrality, f"error_{nombre}")
+                    except Exception:
+                        pass
+                    try:
+                        frame = await recuperar_sesion_centrality(page_centrality)
+                        print(f"    Reintentando {nombre} tras recuperar sesión...")
+                        return await accion_fn(frame)
+                    except Exception as e2:
+                        print(f"  ERROR: {nombre} falló también tras recuperar sesión: {e2}")
+                        try:
+                            await screenshot(page_centrality, f"error_{nombre}_retry")
+                        except Exception:
+                            pass
+                        return None
+
             # ── PASADA 1: Revisión y Autorización PCCT (normal) ──────────────
-            await aplicar_filtro_pcct(page_centrality, frame, ESTADO_EXACTO)
-            pts_aprobados, pts_fallidos, pts_omitidos = await aprobar_pts(
-                page_centrality, frame, page_opat, page_neomante, tipo_flujo="PCCT"
-            )
+            async def _pasada1(frm):
+                await aplicar_filtro_pcct(page_centrality, frm, ESTADO_EXACTO)
+                return await aprobar_pts(page_centrality, frm, page_opat, page_neomante, tipo_flujo="PCCT")
+
+            resultado1 = await ejecutar_pasada("Pasada 1 (PCCT)", _pasada1)
+            if resultado1:
+                pts_aprobados, pts_fallidos, pts_omitidos = resultado1
 
             # ── PASADA 2: Revisión y Autorización PCCT - FP (fuera de plazo) ─
             print("\n" + "="*65)
             print("  PASADA 2: PCCT - FP (Fuera de Plazo)")
             print("="*65)
-            await limpiar_filtro_pcct(page_centrality, frame)
-            await aplicar_filtro_pcct(page_centrality, frame, ESTADO_EXACTO_FP)
-            pts_aprobados_fp, pts_fallidos_fp, pts_omitidos_fp = await aprobar_pts(
-                page_centrality, frame, page_opat, page_neomante, tipo_flujo="FP"
-            )
-            # Consolidar resultados
-            pts_aprobados.extend(pts_aprobados_fp)
-            pts_fallidos.extend(pts_fallidos_fp)
-            pts_omitidos.extend(pts_omitidos_fp)
+
+            async def _pasada2(frm):
+                await limpiar_filtro_pcct(page_centrality, frm)
+                await aplicar_filtro_pcct(page_centrality, frm, ESTADO_EXACTO_FP)
+                return await aprobar_pts(page_centrality, frm, page_opat, page_neomante, tipo_flujo="FP")
+
+            resultado2 = await ejecutar_pasada("Pasada 2 (PCCT-FP)", _pasada2)
+            if resultado2:
+                pts_aprobados_fp, pts_fallidos_fp, pts_omitidos_fp = resultado2
+                pts_aprobados.extend(pts_aprobados_fp)
+                pts_fallidos.extend(pts_fallidos_fp)
+                pts_omitidos.extend(pts_omitidos_fp)
 
             # ── PASADA 3: Esperando activación (excluye Metropolitana) ───────
             print("\n" + "="*65)
             print("  PASADA 3: Esperando activación → agregar a OPAT")
             print("="*65)
-            await aplicar_filtro_pcct(
-                page_centrality, frame, ESTADO_ESPERANDO_ACTIVACION,
-                limpiar_primero=True, desmarcar_bandeja=True
-            )
-            pts_ea_agregados, pts_ea_fallidos, pts_ea_omitidos = await procesar_esperando_activacion(
-                page_centrality, frame, page_opat
-            )
+
+            async def _pasada3(frm):
+                await aplicar_filtro_pcct(
+                    page_centrality, frm, ESTADO_ESPERANDO_ACTIVACION,
+                    limpiar_primero=True, desmarcar_bandeja=True
+                )
+                return await procesar_esperando_activacion(page_centrality, frm, page_opat)
+
+            resultado3 = await ejecutar_pasada("Pasada 3 (Esperando activación)", _pasada3)
+            if resultado3:
+                pts_ea_agregados, pts_ea_fallidos, pts_ea_omitidos = resultado3
 
             # ── PASADA 4: Sin Condiciones (12 horas) / Estado Aprobada ───────
             print("\n" + "="*65)
             print("  PASADA 4: Sin Condiciones (12 horas) → agregar a OPAT")
             print("="*65)
-            await aplicar_filtro_sin_condiciones(page_centrality, frame)
-            pts_sc_agregados, pts_sc_fallidos, pts_sc_omitidos = await procesar_sin_condiciones(
-                page_centrality, frame, page_opat
-            )
+
+            async def _pasada4(frm):
+                await aplicar_filtro_sin_condiciones(page_centrality, frm)
+                return await procesar_sin_condiciones(page_centrality, frm, page_opat)
+
+            resultado4 = await ejecutar_pasada("Pasada 4 (Sin Condiciones)", _pasada4)
+            if resultado4:
+                pts_sc_agregados, pts_sc_fallidos, pts_sc_omitidos = resultado4
 
             # ── PASADA 5: SODI Terceros desde 01/08/2026 ─────────────────────
             print("\n" + "="*65)
             print("  PASADA 5: SODI Terceros → agregar a OPAT")
             print("="*65)
-            await aplicar_filtro_sodi_terceros(page_centrality, frame)
-            pts_st_agregados, pts_st_fallidos, pts_st_omitidos = await procesar_sodi_terceros(
-                page_centrality, frame, page_opat
-            )
+
+            async def _pasada5(frm):
+                await aplicar_filtro_sodi_terceros(page_centrality, frm)
+                return await procesar_sodi_terceros(page_centrality, frm, page_opat)
+
+            resultado5 = await ejecutar_pasada("Pasada 5 (SODI Terceros)", _pasada5)
+            if resultado5:
+                pts_st_agregados, pts_st_fallidos, pts_st_omitidos = resultado5
 
         except Exception as e:
             error_critico = str(e)
