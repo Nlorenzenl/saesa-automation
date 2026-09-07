@@ -31,7 +31,7 @@ NEOMANTE_PASS = os.environ["NEOMANTE_PASS"]
 GMAIL_USER = os.environ["GMAIL_USER"]
 GMAIL_PASS = os.environ["GMAIL_APP_PASS"]
 EMAIL_DEST = os.environ["EMAIL_DEST"]
-EMAIL_CC   = ["nicolas.lorenzen@saesa.cl", "jorge.canete@saesa.cl", "alexis.aedo@saesa.cl", "ignacio.ligueros@saesa.cl"]
+EMAIL_CC   = ["nicolas.lorenzen@saesa.cl", "jorge.canete@saesa.cl", "alexis.aedo@saesa.cl", "jeanine.valenzuela@saesa.cl"]
 
 DRY_RUN          = os.environ.get("DRY_RUN", "true").lower() == "true"
 MAX_APROBACIONES = int(os.environ.get("MAX_APROBACIONES", "50"))
@@ -1002,6 +1002,14 @@ async def procesar_sin_condiciones(page, frame, opat_page):
         id_pagina_anterior = id_actual_pagina
 
         pts_esta_pagina = []
+        for row in filas:
+            if not row:
+                continue
+            id_pt, area_pt, estado_pt = extraer_info_fila(row)
+            if not id_pt:
+                continue
+            pts_esta_pagina.append({"id": id_pt, "area": area_pt, "estado": estado_pt})
+            print(f"    [CANDIDATO OPAT] {id_pt} | {area_pt}")
 
         for pt in pts_esta_pagina:
             if len(pts_agregados) >= MAX_APROBACIONES:
@@ -1099,6 +1107,29 @@ async def set_campo_fecha_filtro(frame, label_texto, valor):
     """, [label_texto, valor])
 
 
+async def leer_valor_campo_fecha(frame, label_texto):
+    """Diagnóstico: lee el valor actual (raw DOM) del input de fecha asociado a un
+    label del panel de Filtros, para confirmar si un valor escrito se mantuvo."""
+    return await frame.evaluate("""
+    (labelBuscado) => {
+        const win = Array.from(document.querySelectorAll(".x-window"))
+            .filter(w => w.offsetParent && (w.innerText || "").includes("Filtros"))[0];
+        if (!win) return {ok:false, msg:"No encontré ventana Filtros"};
+        const labels = Array.from(win.querySelectorAll("label,td,div,span"))
+            .filter(el => el.offsetParent);
+        let target = null;
+        for (const el of labels) {
+            if ((el.innerText || "").trim().indexOf(labelBuscado) === 0) { target = el; break; }
+        }
+        if (!target) return {ok:false, msg:"No encontré label " + labelBuscado};
+        const tr = target.closest("tr") || win;
+        const inputs = Array.from(tr.querySelectorAll('input[type="text"]'));
+        if (inputs.length === 0) return {ok:false, msg:"No encontré input de fecha"};
+        return {ok:true, valor: inputs[0].value};
+    }
+    """, label_texto)
+
+
 async def aplicar_filtro_sodi_terceros(page, frame):
     print(f"\n[3] FILTRO — Tipo de permiso: {TIPO_PERMISO_SODI_TERCEROS} / Inicio disponibilidad desde: {FECHA_DESDE_SODI_TERCEROS}")
     await esperar_mask_extjs(page)
@@ -1149,6 +1180,8 @@ async def aplicar_filtro_sodi_terceros(page, frame):
     r_fecha = await set_campo_fecha_filtro(frame, "Inicio de disponibilidad desde", FECHA_DESDE_SODI_TERCEROS)
     print(f"  Inicio de disponibilidad desde: {FECHA_DESDE_SODI_TERCEROS} → {r_fecha}")
     await page.wait_for_timeout(500)
+    r_fecha_check1 = await leer_valor_campo_fecha(frame, "Inicio de disponibilidad desde")
+    print(f"    [DIAG] valor del campo fecha justo después de escribirlo: {r_fecha_check1}")
 
     # 4. Tipo de permiso de trabajo → SODI TERCEROS
     r_tipo_trigger = await abrir_combo_filtro(frame, "Tipo de permiso de trabajo:")
@@ -1161,6 +1194,8 @@ async def aplicar_filtro_sodi_terceros(page, frame):
     if not r_tipo_pick.get("ok"):
         raise RuntimeError(f"No se pudo seleccionar Tipo de permiso {TIPO_PERMISO_SODI_TERCEROS!r}: {r_tipo_pick}")
     await page.wait_for_timeout(1000)
+    r_fecha_check2 = await leer_valor_campo_fecha(frame, "Inicio de disponibilidad desde")
+    print(f"    [DIAG] valor del campo fecha justo antes de Aplicar: {r_fecha_check2}")
 
     # 5. Aplicar (Estado se deja vacío — cualquier estado)
     aplicar_btn = frame.locator("button.x-btn-text.apply", has_text="Aplicar").first
