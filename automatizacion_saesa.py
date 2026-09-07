@@ -983,7 +983,7 @@ async def procesar_sin_condiciones(page, frame, opat_page):
     id_pagina_anterior = None
     for pagina in range(1, paginas + 1):
         print(f"\n  ── Página {pagina}/{paginas} ──")
-        await page.wait_for_timeout(1500)
+        await page.wait_for_timeout(900)
 
         filas = await frame.evaluate(JS_READ_ROWS)
         print(f"  Filas leídas: {len(filas)}")
@@ -1064,9 +1064,9 @@ async def procesar_sin_condiciones(page, frame, opat_page):
             sig = await frame.evaluate(JS_NEXT_PAGE)
             if not sig:
                 break
-            await page.wait_for_timeout(1500)
+            await page.wait_for_timeout(800)
             await esperar_mask_extjs(page, timeout_ms=8000)
-            await page.wait_for_timeout(2500)
+            await page.wait_for_timeout(1200)
 
     return pts_agregados, pts_fallidos, pts_omitidos
 
@@ -1242,7 +1242,7 @@ async def procesar_sodi_terceros(page, frame, opat_page):
     id_pagina_anterior = None
     for pagina in range(1, paginas + 1):
         print(f"\n  ── Página {pagina}/{paginas} ──")
-        await page.wait_for_timeout(1500)
+        await page.wait_for_timeout(900)
 
         filas = await frame.evaluate(JS_READ_ROWS)
         print(f"  Filas leídas: {len(filas)}")
@@ -1346,9 +1346,9 @@ async def procesar_sodi_terceros(page, frame, opat_page):
             sig = await frame.evaluate(JS_NEXT_PAGE)
             if not sig:
                 break
-            await page.wait_for_timeout(1500)
+            await page.wait_for_timeout(800)
             await esperar_mask_extjs(page, timeout_ms=8000)
-            await page.wait_for_timeout(2500)
+            await page.wait_for_timeout(1200)
 
     return pts_agregados, pts_fallidos, pts_omitidos
 
@@ -1530,16 +1530,12 @@ async def existe_pt_en_opat(opat_page, pt_id):
             print("    ADVERTENCIA: no se encontró el campo 'Buscar' en OPAT")
             return None
 
-        await buscar_input.click()
-        await buscar_input.fill("")
-        await buscar_input.fill(pt_id)
-        await buscar_input.dispatch_event("input")
-        await opat_page.wait_for_timeout(1200)
+        await buscar_input.fill(pt_id)  # fill() ya limpia y dispara input/change
         try:
             await buscar_input.press("Enter")
         except Exception:
             pass
-        await opat_page.wait_for_timeout(1500)
+        await opat_page.wait_for_timeout(900)
 
         info = await opat_page.evaluate("""
         () => {
@@ -1560,7 +1556,7 @@ async def existe_pt_en_opat(opat_page, pt_id):
         try:
             await buscar_input.fill("")
             await buscar_input.press("Enter")
-            await opat_page.wait_for_timeout(500)
+            await opat_page.wait_for_timeout(300)
         except Exception:
             pass
 
@@ -1653,338 +1649,220 @@ async def subir_pt_a_opat(opat_page, datos):
 
         modal_ok = await abrir_nuevo_pt_opat(opat_page)
         print(f"  modal abierto: {modal_ok}")
-        await screenshot(opat_page, f"opat_form_{pt_id}")
 
-        campos_info = await opat_page.evaluate("""
-        () => {
-            var modal = document.getElementById('modalEditarPT');
-            if (!modal) return {};
-            var inputs = Array.from(modal.querySelectorAll('input,select,textarea'));
-            var info = {};
-            inputs.forEach(function(el) {
-                var label = '';
-                if (el.id) {
-                    var labelEl = document.querySelector('label[for="' + el.id + '"]');
-                    if (labelEl) label = labelEl.innerText.trim();
-                }
-                info[el.id || el.name || 'no-id-' + el.type] = {
-                    type: el.type || el.tagName,
-                    placeholder: el.placeholder || '',
-                    label: label,
-                    value: el.value || ''
-                };
-            });
-            return info;
-        }
-        """)
-        print(f"  campos_info: {list(campos_info.keys())}")
+        # ── Pre-cálculo de valores en Python (antes de tocar el DOM) ────────────
+        fecha_inicio_str = None
+        if datos.get("fecha_inicio"):
+            fecha_inicio_str = datetime.strptime(datos["fecha_inicio"], "%m/%d/%Y").strftime("%Y-%m-%d")
+        hora_inicio_str = None
+        if datos.get("hora_inicio"):
+            hora_inicio_str = datetime.strptime(datos["hora_inicio"], "%I:%M %p").strftime("%H:%M")
+        fecha_fin_str = None
+        if datos.get("fecha_fin"):
+            fecha_fin_str = datetime.strptime(datos["fecha_fin"], "%m/%d/%Y").strftime("%Y-%m-%d")
+        hora_fin_str = None
+        if datos.get("hora_fin"):
+            hora_fin_str = datetime.strptime(datos["hora_fin"], "%I:%M %p").strftime("%H:%M")
 
-        # ── N° PT ──────────────────────────────────────────────────────────────
-        r = await opat_page.evaluate(f"""
-        (ptId) => {{
-            var modal = document.getElementById('modalEditarPT');
-            if (!modal) return 'no modal';
-            var inputs = Array.from(modal.querySelectorAll('input[type="text"],input:not([type])'));
-            for (var i=0; i<inputs.length; i++) {{
-                var ph = (inputs[i].placeholder || '').toLowerCase();
-                if (ph.includes('autom') || ph.includes('ingrese') || ph.includes('n°') || ph.includes('npt')) {{
-                    inputs[i].value = ptId;
-                    inputs[i].dispatchEvent(new Event('input', {{bubbles:true}}));
-                    inputs[i].dispatchEvent(new Event('change', {{bubbles:true}}));
-                    return 'ok:' + inputs[i].id;
-                }}
-            }}
-            for (var j=0; j<inputs.length; j++) {{
-                if (inputs[j].offsetParent) {{
-                    inputs[j].value = ptId;
-                    inputs[j].dispatchEvent(new Event('input', {{bubbles:true}}));
-                    inputs[j].dispatchEvent(new Event('change', {{bubbles:true}}));
-                    return 'fallback:' + inputs[j].id;
-                }}
-            }}
-            return 'not_found';
-        }}
-        """, pt_id)
-        print(f"  N° PT: {pt_id} → {r}")
-        await opat_page.wait_for_timeout(300)
-
-        # ── ZONA (Norte/Metropolitana/Sur, según SUBESTACIONES_GERENCIA_ZONAL) ──
         zona_valor  = obtener_zona_por_se(datos.get("se_linea", "")) or "Metropolitana"
         zona_opcion = ZONA_DROPDOWN_TEXTO.get(zona_valor, zona_valor)
-        r = await opat_page.evaluate("""
-        (val) => {
+
+        area_zonal_valor = datos.get("area_texto") or "Área Mtto Zonal Metropolitana"
+
+        sigla_programador = obtener_sigla_programador(datos.get("responsable_caso", ""))
+        valor_programador = sigla_programador or datos.get("responsable_caso") or None
+
+        payload = {
+            "ptId": pt_id,
+            "zonaOpcion": zona_opcion,
+            "fechaInicio": fecha_inicio_str,
+            "horaInicio": hora_inicio_str,
+            "fechaFin": fecha_fin_str,
+            "horaFin": hora_fin_str,
+            "tipoTrabajo": datos.get("tipo_trabajo", "DESCONEXIÓN"),
+            "seLinea": datos.get("se_linea") or None,
+            "areaZonal": area_zonal_valor,
+            "programador": valor_programador,
+            "componentes": datos.get("componentes") or None,
+            "descripcion": datos.get("descripcion") or None,
+        }
+
+        # ── Un único evaluate() llena TODOS los campos del formulario ──────────
+        r_campos = await opat_page.evaluate("""
+        (p) => {
             var modal = document.getElementById('modalEditarPT');
-            var sel = modal ? modal.querySelector('#modZona') : null;
-            if (!sel) {
+            if (!modal) return {error: 'no_modal'};
+            var r = {};
+            function setVal(el, val) {
+                el.value = val;
+                el.dispatchEvent(new Event('input', {bubbles:true}));
+                el.dispatchEvent(new Event('change', {bubbles:true}));
+            }
+
+            // N° PT
+            (function() {
+                var inputs = Array.from(modal.querySelectorAll('input[type="text"],input:not([type])'));
+                for (var i=0; i<inputs.length; i++) {
+                    var ph = (inputs[i].placeholder || '').toLowerCase();
+                    if (ph.includes('autom') || ph.includes('ingrese') || ph.includes('n°') || ph.includes('npt')) {
+                        setVal(inputs[i], p.ptId); r.npt = 'ok:' + inputs[i].id; return;
+                    }
+                }
+                for (var j=0; j<inputs.length; j++) {
+                    if (inputs[j].offsetParent) { setVal(inputs[j], p.ptId); r.npt = 'fallback:' + inputs[j].id; return; }
+                }
+                r.npt = 'not_found';
+            })();
+
+            // Zona
+            (function() {
+                var sel = modal.querySelector('#modZona');
+                if (!sel) {
+                    var selects = Array.from(modal.querySelectorAll('select'));
+                    for (var i=0; i<selects.length; i++) {
+                        var opts = Array.from(selects[i].options).map(o => o.text.trim());
+                        if (opts.some(o => o.includes('Zona') || o.includes('Metropolitana') || o.includes('Norte') || o.includes('Sur'))) { sel = selects[i]; break; }
+                    }
+                }
+                if (!sel) { r.zona = 'not_found'; return; }
+                for (var j=0; j<sel.options.length; j++) {
+                    if (sel.options[j].text.trim() === p.zonaOpcion) {
+                        sel.selectedIndex = j; sel.dispatchEvent(new Event('change', {bubbles:true}));
+                        r.zona = 'ok:' + sel.id; return;
+                    }
+                }
+                r.zona = 'not_found_option';
+            })();
+
+            // Fecha/Hora inicio y fin
+            if (p.fechaInicio) {
+                var dates = Array.from(modal.querySelectorAll('input[type="date"]'));
+                if (dates[0]) { dates[0].value = p.fechaInicio; dates[0].dispatchEvent(new Event('change', {bubbles:true})); r.fechaInicio = 'ok:' + dates[0].id; }
+                else r.fechaInicio = 'not_found';
+            }
+            if (p.horaInicio) {
+                var times = Array.from(modal.querySelectorAll('input[type="time"]'));
+                if (times[0]) { times[0].value = p.horaInicio; times[0].dispatchEvent(new Event('change', {bubbles:true})); r.horaInicio = 'ok:' + times[0].id; }
+                else r.horaInicio = 'not_found';
+            }
+            if (p.fechaFin) {
+                var dates2 = Array.from(modal.querySelectorAll('input[type="date"]'));
+                if (dates2[1]) { dates2[1].value = p.fechaFin; dates2[1].dispatchEvent(new Event('change', {bubbles:true})); r.fechaFin = 'ok:' + dates2[1].id; }
+                else r.fechaFin = 'not_found';
+            }
+            if (p.horaFin) {
+                var times2 = Array.from(modal.querySelectorAll('input[type="time"]'));
+                if (times2[1]) { times2[1].value = p.horaFin; times2[1].dispatchEvent(new Event('change', {bubbles:true})); r.horaFin = 'ok:' + times2[1].id; }
+                else r.horaFin = 'not_found';
+            }
+
+            // Tipo Trabajo
+            (function() {
                 var selects = Array.from(modal.querySelectorAll('select'));
                 for (var i=0; i<selects.length; i++) {
                     var opts = Array.from(selects[i].options).map(o => o.text.trim());
-                    if (opts.some(o => o.includes('Zona') || o.includes('Metropolitana') || o.includes('Norte') || o.includes('Sur'))) {
-                        sel = selects[i];
-                        break;
+                    var esSelectTipoTrabajo = opts.some(function(o) {
+                        var ou = o.toUpperCase();
+                        return o === 'Sin Condiciones' || o === 'Sodi Terceros' || ou.indexOf('DESCONEX') === 0 || ou.indexOf('INTERVEN') === 0;
+                    });
+                    if (!esSelectTipoTrabajo) continue;
+                    if (p.tipoTrabajo === 'Sin Condiciones' || p.tipoTrabajo === 'Sodi Terceros') {
+                        for (var j=0; j<selects[i].options.length; j++) {
+                            if (selects[i].options[j].text.trim() === p.tipoTrabajo) {
+                                selects[i].selectedIndex = j; selects[i].dispatchEvent(new Event('change', {bubbles:true}));
+                                r.tipoTrabajo = 'ok_exacto:' + selects[i].id; return;
+                            }
+                        }
+                        r.tipoTrabajo = 'not_found_exacto'; return;
                     }
-                }
-            }
-            if (!sel) return 'not_found';
-            for (var j=0; j<sel.options.length; j++) {
-                if (sel.options[j].text.trim() === val) {
-                    sel.selectedIndex = j;
-                    sel.dispatchEvent(new Event('change', {bubbles:true}));
-                    return 'ok:' + sel.id;
-                }
-            }
-            return 'not_found_option';
-        }
-        """, zona_opcion)
-        print(f"  Zona: '{datos.get('se_linea','')}' → {zona_valor} ('{zona_opcion}') → {r}")
-        await opat_page.wait_for_timeout(300)
-
-        # ── FECHA INICIO ──────────────────────────────────────────────────────
-        if datos.get("fecha_inicio"):
-            fecha_str = datetime.strptime(datos["fecha_inicio"], "%m/%d/%Y").strftime("%Y-%m-%d")
-            r = await opat_page.evaluate(f"""
-            (val) => {{
-                var modal = document.getElementById('modalEditarPT');
-                var dates = Array.from(modal.querySelectorAll('input[type="date"]'));
-                if (dates[0]) {{
-                    dates[0].value = val;
-                    dates[0].dispatchEvent(new Event('change', {{bubbles:true}}));
-                    return 'ok:' + dates[0].id;
-                }}
-                return 'not_found';
-            }}
-            """, fecha_str)
-            print(f"  Fecha inicio: {datos['fecha_inicio']} → {r}")
-            await opat_page.wait_for_timeout(300)
-
-        # ── HORA INICIO ───────────────────────────────────────────────────────
-        if datos.get("hora_inicio"):
-            dt_hora = datetime.strptime(datos["hora_inicio"], "%I:%M %p")
-            hora_str = dt_hora.strftime("%H:%M")
-            r = await opat_page.evaluate(f"""
-            (val) => {{
-                var modal = document.getElementById('modalEditarPT');
-                var times = Array.from(modal.querySelectorAll('input[type="time"]'));
-                if (times[0]) {{
-                    times[0].value = val;
-                    times[0].dispatchEvent(new Event('change', {{bubbles:true}}));
-                    return 'ok:' + times[0].id;
-                }}
-                return 'not_found';
-            }}
-            """, hora_str)
-            print(f"  Hora inicio: {datos['hora_inicio']} → {r}")
-            await opat_page.wait_for_timeout(300)
-
-        # ── FECHA FIN ─────────────────────────────────────────────────────────
-        if datos.get("fecha_fin"):
-            fecha_fin_str = datetime.strptime(datos["fecha_fin"], "%m/%d/%Y").strftime("%Y-%m-%d")
-            r = await opat_page.evaluate(f"""
-            (val) => {{
-                var modal = document.getElementById('modalEditarPT');
-                var dates = Array.from(modal.querySelectorAll('input[type="date"]'));
-                if (dates[1]) {{
-                    dates[1].value = val;
-                    dates[1].dispatchEvent(new Event('change', {{bubbles:true}}));
-                    return 'ok:' + dates[1].id;
-                }}
-                return 'not_found';
-            }}
-            """, fecha_fin_str)
-            print(f"  Fecha fin: {datos['fecha_fin']} → {r}")
-            await opat_page.wait_for_timeout(300)
-
-        # ── HORA FIN ──────────────────────────────────────────────────────────
-        if datos.get("hora_fin"):
-            dt_hora_fin = datetime.strptime(datos["hora_fin"], "%I:%M %p")
-            hora_fin_str = dt_hora_fin.strftime("%H:%M")
-            r = await opat_page.evaluate(f"""
-            (val) => {{
-                var modal = document.getElementById('modalEditarPT');
-                var times = Array.from(modal.querySelectorAll('input[type="time"]'));
-                if (times[1]) {{
-                    times[1].value = val;
-                    times[1].dispatchEvent(new Event('change', {{bubbles:true}}));
-                    return 'ok:' + times[1].id;
-                }}
-                return 'not_found';
-            }}
-            """, hora_fin_str)
-            print(f"  Hora fin: {datos['hora_fin']} → {r}")
-            await opat_page.wait_for_timeout(300)
-
-        # ── TIPO TRABAJO ──────────────────────────────────────────────────────
-        tipo_trabajo = datos.get("tipo_trabajo", "DESCONEXIÓN")
-        r = await opat_page.evaluate("""
-        (tipo) => {
-            var modal = document.getElementById('modalEditarPT');
-            var selects = Array.from(modal.querySelectorAll('select'));
-            for (var i=0; i<selects.length; i++) {
-                var opts = Array.from(selects[i].options).map(o => o.text.trim());
-                var esSelectTipoTrabajo = opts.some(function(o) {
-                    var ou = o.toUpperCase();
-                    return o === 'Sin Condiciones' || o === 'Sodi Terceros' || ou.indexOf('DESCONEX') === 0 || ou.indexOf('INTERVEN') === 0;
-                });
-                if (!esSelectTipoTrabajo) continue;
-
-                // Caso 'Sin Condiciones' / 'Sodi Terceros': match exacto
-                if (tipo === 'Sin Condiciones' || tipo === 'Sodi Terceros') {
-                    for (var j=0; j<selects[i].options.length; j++) {
-                        if (selects[i].options[j].text.trim() === tipo) {
-                            selects[i].selectedIndex = j;
-                            selects[i].dispatchEvent(new Event('change', {bubbles:true}));
-                            return 'ok_exacto:' + selects[i].id;
+                    var prefijo = (p.tipoTrabajo.toUpperCase().indexOf('INTERVEN') === 0) ? 'INTERVEN' : 'DESCONEX';
+                    for (var k=0; k<selects[i].options.length; k++) {
+                        var txt = selects[i].options[k].text.trim();
+                        if (txt.toUpperCase().indexOf(prefijo) === 0 && txt.indexOf('(IN)') > -1) {
+                            selects[i].selectedIndex = k; selects[i].dispatchEvent(new Event('change', {bubbles:true}));
+                            r.tipoTrabajo = 'ok_in:' + txt; return;
                         }
                     }
-                    return 'not_found_exacto';
+                    for (var m=0; m<selects[i].options.length; m++) {
+                        var txt2 = selects[i].options[m].text.trim();
+                        if (txt2.toUpperCase().indexOf(prefijo) === 0) {
+                            selects[i].selectedIndex = m; selects[i].dispatchEvent(new Event('change', {bubbles:true}));
+                            r.tipoTrabajo = 'ok_fallback:' + txt2; return;
+                        }
+                    }
+                    r.tipoTrabajo = 'not_found_prefijo'; return;
                 }
+                r.tipoTrabajo = 'not_found';
+            })();
 
-                // Caso DESCONEXIÓN/INTERVENCIÓN: las opciones reales son
-                // 'Desconexión (IE)'/'Desconexión (IN)'/'Intervención (IE)'/'Intervención (IN)'.
-                // Por ahora siempre se usa la variante (IN) — instalación normal.
-                var prefijo = (tipo.toUpperCase().indexOf('INTERVEN') === 0) ? 'INTERVEN' : 'DESCONEX';
-                for (var k=0; k<selects[i].options.length; k++) {
-                    var txt = selects[i].options[k].text.trim();
-                    if (txt.toUpperCase().indexOf(prefijo) === 0 && txt.indexOf('(IN)') > -1) {
-                        selects[i].selectedIndex = k;
-                        selects[i].dispatchEvent(new Event('change', {bubbles:true}));
-                        return 'ok_in:' + txt;
+            // SE o Línea
+            if (p.seLinea) {
+                (function() {
+                    var labels = Array.from(modal.querySelectorAll('label'));
+                    for (var i=0; i<labels.length; i++) {
+                        var lt = (labels[i].innerText || '').trim();
+                        if (lt.includes('SE') || (lt.includes('L') && lt.includes('nea'))) {
+                            var forId = labels[i].getAttribute('for');
+                            if (forId) {
+                                var el = document.getElementById(forId);
+                                if (el) { setVal(el, p.seLinea); r.seLinea = 'ok:' + forId; return; }
+                            }
+                        }
                     }
-                }
-                for (var m=0; m<selects[i].options.length; m++) {
-                    var txt2 = selects[i].options[m].text.trim();
-                    if (txt2.toUpperCase().indexOf(prefijo) === 0) {
-                        selects[i].selectedIndex = m;
-                        selects[i].dispatchEvent(new Event('change', {bubbles:true}));
-                        return 'ok_fallback:' + txt2;
+                    var inputs = Array.from(modal.querySelectorAll('input[type="text"]'));
+                    for (var j=0; j<inputs.length; j++) {
+                        var ph = (inputs[j].placeholder || '').trim();
+                        if (ph === '' && inputs[j].offsetParent) { setVal(inputs[j], p.seLinea); r.seLinea = 'fallback_empty:' + inputs[j].id; return; }
                     }
-                }
-                return 'not_found_prefijo';
+                    r.seLinea = 'not_found';
+                })();
             }
-            return 'not_found';
-        }
-        """, tipo_trabajo)
-        print(f"  Tipo trabajo: {tipo_trabajo} → {r}")
-        await opat_page.wait_for_timeout(300)
 
-        # ── SE O LÍNEA ────────────────────────────────────────────────────────
-        if datos.get("se_linea"):
-            r = await opat_page.evaluate(f"""
-            (val) => {{
-                var modal = document.getElementById('modalEditarPT');
-                var labels = Array.from(modal.querySelectorAll('label'));
-                for (var i=0; i<labels.length; i++) {{
-                    var lt = (labels[i].innerText || '').trim();
-                    if (lt.includes('SE') || lt.includes('L') && lt.includes('nea')) {{
-                        var forId = labels[i].getAttribute('for');
-                        if (forId) {{
-                            var el = document.getElementById(forId);
-                            if (el) {{
-                                el.value = val;
-                                el.dispatchEvent(new Event('input', {{bubbles:true}}));
-                                el.dispatchEvent(new Event('change', {{bubbles:true}}));
-                                return 'ok:' + forId;
-                            }}
-                        }}
-                    }}
-                }}
+            // Área Zonal
+            (function() {
                 var inputs = Array.from(modal.querySelectorAll('input[type="text"]'));
-                for (var j=0; j<inputs.length; j++) {{
-                    var ph = (inputs[j].placeholder || '').trim();
-                    if (ph === '' && inputs[j].offsetParent) {{
-                        inputs[j].value = val;
-                        inputs[j].dispatchEvent(new Event('input', {{bubbles:true}}));
-                        inputs[j].dispatchEvent(new Event('change', {{bubbles:true}}));
-                        return 'fallback_empty:' + inputs[j].id;
-                    }}
-                }}
-                return 'not_found';
-            }}
-            """, datos["se_linea"])
-            print(f"  SE o Línea: {datos['se_linea']} → {r}")
-            await opat_page.wait_for_timeout(300)
-
-        # ── ÁREA ZONAL (texto literal traído desde el campo 'Área' de Centrality) ─
-        area_zonal_valor = datos.get("area_texto") or "Área Mtto Zonal Metropolitana"
-        r = await opat_page.evaluate("""
-        (val) => {
-            var modal = document.getElementById('modalEditarPT');
-            var inputs = Array.from(modal.querySelectorAll('input[type="text"]'));
-            for (var i=0; i<inputs.length; i++) {
-                var ph = (inputs[i].placeholder || '').toLowerCase();
-                if (ph.includes('metropolitana') || ph.includes('area') || ph.includes('área')) {
-                    inputs[i].value = val;
-                    inputs[i].dispatchEvent(new Event('input', {bubbles:true}));
-                    inputs[i].dispatchEvent(new Event('change', {bubbles:true}));
-                    return 'ok:' + inputs[i].id;
-                }
-            }
-            return 'not_found';
-        }
-        """, area_zonal_valor)
-        print(f"  Área Zonal → '{area_zonal_valor}' → {r}")
-        await opat_page.wait_for_timeout(300)
-
-        # ── PROGRAMADOR (Responsable del caso en Centrality) ─────────────────
-        if datos.get("responsable_caso"):
-            sigla_programador  = obtener_sigla_programador(datos["responsable_caso"])
-            valor_programador  = sigla_programador or datos["responsable_caso"]
-            r = await opat_page.evaluate("""
-            (val) => {
-                var modal = document.getElementById('modalEditarPT');
-                var el = modal ? modal.querySelector('#modProgramador') : document.getElementById('modProgramador');
-                if (el) {
-                    el.value = val;
-                    el.dispatchEvent(new Event('input', {bubbles:true}));
-                    el.dispatchEvent(new Event('change', {bubbles:true}));
-                    return 'ok:modProgramador';
-                }
-                return 'not_found';
-            }
-            """, valor_programador)
-            print(f"  Programador: {datos['responsable_caso']} → sigla '{sigla_programador}' → valor '{valor_programador}' → {r}")
-            await opat_page.wait_for_timeout(300)
-
-        # ── COMPONENTES ───────────────────────────────────────────────────────
-        if datos.get("componentes"):
-            r = await opat_page.evaluate(f"""
-            (val) => {{
-                var modal = document.getElementById('modalEditarPT');
-                var inputs = Array.from(modal.querySelectorAll('input'));
-                for (var i=0; i<inputs.length; i++) {{
+                for (var i=0; i<inputs.length; i++) {
                     var ph = (inputs[i].placeholder || '').toLowerCase();
-                    if (ph.includes('52j') || ph.includes('componente')) {{
-                        inputs[i].value = val;
-                        inputs[i].dispatchEvent(new Event('input', {{bubbles:true}}));
-                        inputs[i].dispatchEvent(new Event('change', {{bubbles:true}}));
-                        return 'ok:' + inputs[i].id;
-                    }}
-                }}
-                return 'not_found';
-            }}
-            """, datos["componentes"])
-            print(f"  Componentes → {r}")
-            await opat_page.wait_for_timeout(300)
+                    if (ph.includes('metropolitana') || ph.includes('area') || ph.includes('área')) {
+                        setVal(inputs[i], p.areaZonal); r.areaZonal = 'ok:' + inputs[i].id; return;
+                    }
+                }
+                r.areaZonal = 'not_found';
+            })();
 
-        # ── DESCRIPCIÓN / OBJETIVO GENERAL ───────────────────────────────────
-        if datos.get("descripcion"):
-            r = await opat_page.evaluate(f"""
-            (val) => {{
-                var modal = document.getElementById('modalEditarPT');
+            // Programador
+            if (p.programador) {
+                var elProg = modal.querySelector('#modProgramador');
+                if (elProg) { setVal(elProg, p.programador); r.programador = 'ok:modProgramador'; }
+                else r.programador = 'not_found';
+            }
+
+            // Componentes
+            if (p.componentes) {
+                (function() {
+                    var inputs = Array.from(modal.querySelectorAll('input'));
+                    for (var i=0; i<inputs.length; i++) {
+                        var ph = (inputs[i].placeholder || '').toLowerCase();
+                        if (ph.includes('52j') || ph.includes('componente')) { setVal(inputs[i], p.componentes); r.componentes = 'ok:' + inputs[i].id; return; }
+                    }
+                    r.componentes = 'not_found';
+                })();
+            }
+
+            // Descripción
+            if (p.descripcion) {
                 var textareas = Array.from(modal.querySelectorAll('textarea'));
-                if (textareas[0]) {{
-                    textareas[0].value = val;
-                    textareas[0].dispatchEvent(new Event('input', {{bubbles:true}}));
-                    textareas[0].dispatchEvent(new Event('change', {{bubbles:true}}));
-                    return 'ok:' + textareas[0].id;
-                }}
-                return 'not_found';
-            }}
-            """, datos["descripcion"])
-            print(f"  Descripción → {r}")
-            await opat_page.wait_for_timeout(300)
+                if (textareas[0]) { setVal(textareas[0], p.descripcion); r.descripcion = 'ok:' + textareas[0].id; }
+                else r.descripcion = 'not_found';
+            }
 
-        await screenshot(opat_page, f"opat_pre_guardar_{pt_id}")
+            return r;
+        }
+        """, payload)
+        print(f"  Campos completados: {r_campos}")
+        if datos.get("responsable_caso"):
+            print(f"  Programador: {datos['responsable_caso']} → sigla '{sigla_programador}' → valor '{valor_programador}'")
+        await opat_page.wait_for_timeout(400)
 
         # ── GUARDAR Y CERRAR ──────────────────────────────────────────────────
         r_guardar = await opat_page.evaluate("""
@@ -2003,12 +1881,7 @@ async def subir_pt_a_opat(opat_page, datos):
         }
         """)
         print(f"  Guardar: {r_guardar}")
-        await opat_page.wait_for_timeout(3000)
-
-        try:
-            await screenshot(opat_page, f"opat_post_guardar_{pt_id}")
-        except Exception:
-            print(f"  ADVERTENCIA: screenshot post-guardar falló (no crítico)")
+        await opat_page.wait_for_timeout(2000)
 
         try:
             modal_aun_abierto = await opat_page.evaluate("""
@@ -2019,6 +1892,10 @@ async def subir_pt_a_opat(opat_page, datos):
             """)
             if modal_aun_abierto:
                 print(f"  ADVERTENCIA: modal sigue abierto para {pt_id}")
+                try:
+                    await screenshot(opat_page, f"opat_modal_atascado_{pt_id}")
+                except Exception:
+                    pass
                 await cerrar_modal_opat(opat_page)
                 return False
         except Exception:
@@ -2059,7 +1936,7 @@ async def aprobar_pts(page, frame, opat_page, neo_page, tipo_flujo="PCCT"):
     id_pagina_anterior = None
     for pagina in range(1, paginas + 1):
         print(f"\n  ── Página {pagina}/{paginas} ──")
-        await page.wait_for_timeout(1500)
+        await page.wait_for_timeout(900)
 
         filas = await frame.evaluate(JS_READ_ROWS)
         print(f"  Filas leídas: {len(filas)}")
@@ -2273,9 +2150,9 @@ async def aprobar_pts(page, frame, opat_page, neo_page, tipo_flujo="PCCT"):
             sig = await frame.evaluate(JS_NEXT_PAGE)
             if not sig:
                 break
-            await page.wait_for_timeout(1500)
+            await page.wait_for_timeout(800)
             await esperar_mask_extjs(page, timeout_ms=8000)
-            await page.wait_for_timeout(2500)
+            await page.wait_for_timeout(1200)
 
     await screenshot(page, "final")
     return pts_aprobados, pts_fallidos, pts_omitidos
@@ -2307,7 +2184,7 @@ async def procesar_esperando_activacion(page, frame, opat_page):
     id_pagina_anterior = None
     for pagina in range(1, paginas + 1):
         print(f"\n  ── Página {pagina}/{paginas} ──")
-        await page.wait_for_timeout(1500)
+        await page.wait_for_timeout(900)
 
         filas = await frame.evaluate(JS_READ_ROWS)
         print(f"  Filas leídas: {len(filas)}")
@@ -2399,9 +2276,9 @@ async def procesar_esperando_activacion(page, frame, opat_page):
             sig = await frame.evaluate(JS_NEXT_PAGE)
             if not sig:
                 break
-            await page.wait_for_timeout(1500)
+            await page.wait_for_timeout(800)
             await esperar_mask_extjs(page, timeout_ms=8000)
-            await page.wait_for_timeout(2500)
+            await page.wait_for_timeout(1200)
 
     return pts_agregados, pts_fallidos, pts_omitidos
 
