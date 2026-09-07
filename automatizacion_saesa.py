@@ -1076,6 +1076,7 @@ async def procesar_sin_condiciones(page, frame, opat_page):
 # =============================================================================
 
 FECHA_DESDE_SODI_TERCEROS  = "01/08/2026"
+FECHA_DESDE_SODI_TERCEROS_DT = datetime(2026, 8, 1)  # corte aplicado en Python sobre 'fecha_inicio' de cada PT
 TIPO_PERMISO_SODI_TERCEROS = "SODI TERCEROS"
 
 
@@ -1131,7 +1132,7 @@ async def leer_valor_campo_fecha(frame, label_texto):
 
 
 async def aplicar_filtro_sodi_terceros(page, frame):
-    print(f"\n[3] FILTRO — Tipo de permiso: {TIPO_PERMISO_SODI_TERCEROS} / Inicio disponibilidad desde: {FECHA_DESDE_SODI_TERCEROS}")
+    print(f"\n[3] FILTRO — Tipo de permiso: {TIPO_PERMISO_SODI_TERCEROS} (el corte de fecha {FECHA_DESDE_SODI_TERCEROS} se aplica al leer cada PT)")
     await esperar_mask_extjs(page)
     await frame.click('text=Filtro')
     await page.wait_for_timeout(2000)
@@ -1176,14 +1177,7 @@ async def aplicar_filtro_sodi_terceros(page, frame):
     print(f"  desmarcar 'En bandeja de trabajo': {r_checkbox}")
     await page.wait_for_timeout(800)
 
-    # 3. Inicio de disponibilidad desde → 01/08/2026
-    r_fecha = await set_campo_fecha_filtro(frame, "Inicio de disponibilidad desde", FECHA_DESDE_SODI_TERCEROS)
-    print(f"  Inicio de disponibilidad desde: {FECHA_DESDE_SODI_TERCEROS} → {r_fecha}")
-    await page.wait_for_timeout(500)
-    r_fecha_check1 = await leer_valor_campo_fecha(frame, "Inicio de disponibilidad desde")
-    print(f"    [DIAG] valor del campo fecha justo después de escribirlo: {r_fecha_check1}")
-
-    # 4. Tipo de permiso de trabajo → SODI TERCEROS
+    # 3. Tipo de permiso de trabajo → SODI TERCEROS
     r_tipo_trigger = await abrir_combo_filtro(frame, "Tipo de permiso de trabajo:")
     print(f"  trigger Tipo de permiso: {r_tipo_trigger}")
     if not r_tipo_trigger.get("ok"):
@@ -1194,10 +1188,8 @@ async def aplicar_filtro_sodi_terceros(page, frame):
     if not r_tipo_pick.get("ok"):
         raise RuntimeError(f"No se pudo seleccionar Tipo de permiso {TIPO_PERMISO_SODI_TERCEROS!r}: {r_tipo_pick}")
     await page.wait_for_timeout(1000)
-    r_fecha_check2 = await leer_valor_campo_fecha(frame, "Inicio de disponibilidad desde")
-    print(f"    [DIAG] valor del campo fecha justo antes de Aplicar: {r_fecha_check2}")
 
-    # 5. Aplicar (Estado se deja vacío — cualquier estado)
+    # 4. Aplicar (Estado se deja vacío — cualquier estado)
     aplicar_btn = frame.locator("button.x-btn-text.apply", has_text="Aplicar").first
     await aplicar_btn.click(timeout=5000, force=True)
     await page.wait_for_timeout(8000)
@@ -1316,6 +1308,21 @@ async def procesar_sodi_terceros(page, frame, opat_page):
                 datos_opat = await leer_detalle_pt(page, frame, pt["id"])
                 if not datos_opat:
                     pts_fallidos.append(f"{pt['id']} - no se pudo leer detalle en Centrality")
+                    continue
+
+                fecha_inicio_dt = None
+                if datos_opat.get("fecha_inicio"):
+                    try:
+                        fecha_inicio_dt = datetime.strptime(datos_opat["fecha_inicio"], "%m/%d/%Y")
+                    except ValueError:
+                        fecha_inicio_dt = None
+
+                if fecha_inicio_dt is not None and fecha_inicio_dt < FECHA_DESDE_SODI_TERCEROS_DT:
+                    pts_omitidos.append({
+                        "id": pt["id"], "area": pt["area"],
+                        "motivo": f"Inicio {datos_opat['fecha_inicio']} anterior a {FECHA_DESDE_SODI_TERCEROS}"
+                    })
+                    print(f"    [OMITIR FECHA] {pt['id']} — inicio {datos_opat['fecha_inicio']} < {FECHA_DESDE_SODI_TERCEROS}")
                     continue
 
                 opat_ok = await subir_pt_a_opat(opat_page, datos_opat)
