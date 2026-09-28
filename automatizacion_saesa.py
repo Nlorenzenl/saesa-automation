@@ -31,7 +31,7 @@ NEOMANTE_PASS = os.environ["NEOMANTE_PASS"]
 GMAIL_USER = os.environ["GMAIL_USER"]
 GMAIL_PASS = os.environ["GMAIL_APP_PASS"]
 EMAIL_DEST = os.environ["EMAIL_DEST"]
-EMAIL_CC   = ["nicolas.lorenzen@saesa.cl", "jorge.canete@saesa.cl", "alexis.aedo@saesa.cl", "ignacio.ligueros@saesa.cl"]
+EMAIL_CC   = ["nicolas.lorenzen@saesa.cl", "jorge.canete@saesa.cl", "alexis.aedo@saesa.cl", "jeanine.valenzuela@saesa.cl"]
 
 DRY_RUN          = os.environ.get("DRY_RUN", "true").lower() == "true"
 MAX_APROBACIONES = int(os.environ.get("MAX_APROBACIONES", "50"))
@@ -245,7 +245,16 @@ def obtener_sigla_programador(nombre_responsable):
     """Retorna la sigla del programador según PROGRAMADOR_SIGLAS, o None si no hay match."""
     if not nombre_responsable:
         return None
-    return PROGRAMADOR_SIGLAS.get(_normalizar_nombre_persona(nombre_responsable))
+    nombre = _normalizar_nombre_persona(nombre_responsable)
+    if nombre in PROGRAMADOR_SIGLAS:
+        return PROGRAMADOR_SIGLAS[nombre]
+    # Match tolerante: nombres con segundo apellido (ej. "Wilson Pino Medina")
+    # coinciden si todas las palabras de la clave están contenidas en el nombre.
+    palabras = set(nombre.split())
+    for clave, sigla in PROGRAMADOR_SIGLAS.items():
+        if set(clave.split()) <= palabras:
+            return sigla
+    return None
 
 
 # =============================================================================
@@ -1437,6 +1446,12 @@ async def procesar_sodi_terceros(page, frame, opat_page):
                     print(f"    [OMITIR FECHA] {pt['id']} — inicio {datos_opat['fecha_inicio']} < {FECHA_DESDE_SODI_TERCEROS}")
                     continue
 
+                # En SODI Terceros el Programador sale de "Editable por" (no de "Responsable del caso")
+                editable = (datos_opat.get("editable_por") or "").strip()
+                if editable and editable != "-":
+                    datos_opat["responsable_caso"] = editable
+                print(f"    Programador (Editable por): {datos_opat.get('responsable_caso')}")
+
                 opat_ok = await subir_pt_a_opat(opat_page, datos_opat)
 
                 pts_agregados.append({
@@ -1554,6 +1569,7 @@ async def leer_detalle_pt(page, frame, pt_id):
         descripcion   = detalle.get("Descripción del trabajo general", "")
         area_texto        = detalle.get("Área", "")
         responsable_caso  = detalle.get("Responsable del caso", "")
+        editable_por      = detalle.get("Editable por", "")
 
         return {
             "id":               pt_id,
@@ -1567,6 +1583,7 @@ async def leer_detalle_pt(page, frame, pt_id):
             "descripcion":      descripcion,
             "area_texto":       area_texto,
             "responsable_caso": responsable_caso,
+            "editable_por":     editable_por,
             "raw":              detalle,
         }
     except Exception as e:
