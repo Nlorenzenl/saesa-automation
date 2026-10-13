@@ -31,10 +31,22 @@ NEOMANTE_PASS = os.environ["NEOMANTE_PASS"]
 GMAIL_USER = os.environ["GMAIL_USER"]
 GMAIL_PASS = os.environ["GMAIL_APP_PASS"]
 EMAIL_DEST = os.environ["EMAIL_DEST"]
-EMAIL_CC   = ["nicolas.lorenzen@saesa.cl", "jorge.canete@saesa.cl", "alexis.aedo@saesa.cl", "jeanine.valenzuela@saesa.cl"]
+EMAIL_CC   = ["nicolas.lorenzen@saesa.cl", "jorge.canete@saesa.cl", "alexis.aedo@saesa.cl", "ignacio.ligueros@saesa.cl"]
 
 DRY_RUN          = os.environ.get("DRY_RUN", "true").lower() == "true"
 MAX_APROBACIONES = int(os.environ.get("MAX_APROBACIONES", "50"))
+
+# Aviso al CEN (Neomante) — desactivado por ahora: el código de login y de
+# creación del aviso (hacer_login_neomante / crear_aviso_cen) queda intacto,
+# solo no se invoca. Para reactivarlo, poner esto en True (o exportar
+# EJECUTAR_AVISO_CEN=true) una vez que se vuelva a necesitar.
+EJECUTAR_AVISO_CEN = os.environ.get("EJECUTAR_AVISO_CEN", "false").lower() == "true"
+
+# Pasada 4 (PTs "Sin Condiciones") — sacada del flujo principal: se moverá a
+# otro flujo/workflow aparte (pendiente de armar). Las funciones
+# aplicar_filtro_sin_condiciones / procesar_sin_condiciones quedan en este
+# archivo sin usar, listas para reutilizarse ahí.
+EJECUTAR_PASADA_SIN_CONDICIONES = os.environ.get("EJECUTAR_PASADA_SIN_CONDICIONES", "false").lower() == "true"
 
 TIMEOUT   = 30_000
 TZ_CHILE  = ZoneInfo("America/Santiago")
@@ -3223,7 +3235,7 @@ def enviar_reporte(pts_aprobados, pts_fallidos, pts_omitidos,
                     pts_ea_agregados=None, pts_ea_fallidos=None, pts_ea_omitidos=None,
                     pts_sc_agregados=None, pts_sc_fallidos=None, pts_sc_omitidos=None,
                     pts_st_agregados=None, pts_st_fallidos=None, pts_st_omitidos=None,
-                    error_critico=None):
+                    error_critico=None, mostrar_sc=True):
     pts_ea_agregados = pts_ea_agregados or []
     pts_ea_fallidos  = pts_ea_fallidos  or []
     pts_ea_omitidos  = pts_ea_omitidos  or []
@@ -3353,6 +3365,20 @@ def enviar_reporte(pts_aprobados, pts_fallidos, pts_omitidos,
             f"{filas_ea(lista)}</table>"
         )
 
+    bloque_sc = ""
+    if mostrar_sc:
+        bloque_sc = (
+            "<hr style='margin:28px 0;border:none;border-top:1px solid #ddd'>"
+            + tabla_ea(pts_sc_agregados, "&#128230; PTs Agregados a OPAT — Sin Condiciones (12 horas)")
+            + f"<h3 style='color:#cc0000;margin:20px 0 8px'>Sin Condiciones — Errores ({len(pts_sc_fallidos)})</h3>"
+            + f"<table style='border-collapse:collapse;width:100%'>{filas_fallidos_lista(pts_sc_fallidos)}</table>"
+            + f"<h3 style='color:#888;margin:20px 0 8px'>Sin Condiciones — Omitidos ({len(pts_sc_omitidos)})</h3>"
+            + "<table style='border-collapse:collapse;width:100%'>"
+            + "<tr style='background:#f6f6f6'><th></th><th>PT</th><th>Área de cobertura</th><th>Motivo</th></tr>"
+            + filas_omitidos_lista(pts_sc_omitidos)
+            + "</table>"
+        )
+
     error_bloque = ""
     if error_critico:
         error_bloque = (
@@ -3400,15 +3426,7 @@ def enviar_reporte(pts_aprobados, pts_fallidos, pts_omitidos,
         + "<tr style='background:#f6f6f6'><th></th><th>PT</th><th>Área de cobertura</th><th>Motivo</th></tr>"
         + filas_omitidos_lista(pts_ea_omitidos)
         + "</table>"
-        + "<hr style='margin:28px 0;border:none;border-top:1px solid #ddd'>"
-        + tabla_ea(pts_sc_agregados, "&#128230; PTs Agregados a OPAT — Sin Condiciones (12 horas)")
-        + f"<h3 style='color:#cc0000;margin:20px 0 8px'>Sin Condiciones — Errores ({len(pts_sc_fallidos)})</h3>"
-        + f"<table style='border-collapse:collapse;width:100%'>{filas_fallidos_lista(pts_sc_fallidos)}</table>"
-        + f"<h3 style='color:#888;margin:20px 0 8px'>Sin Condiciones — Omitidos ({len(pts_sc_omitidos)})</h3>"
-        + "<table style='border-collapse:collapse;width:100%'>"
-        + "<tr style='background:#f6f6f6'><th></th><th>PT</th><th>Área de cobertura</th><th>Motivo</th></tr>"
-        + filas_omitidos_lista(pts_sc_omitidos)
-        + "</table>"
+        + bloque_sc
         + "<hr style='margin:28px 0;border:none;border-top:1px solid #ddd'>"
         + tabla_ea(pts_st_agregados, "&#128230; PTs Agregados a OPAT — SODI Terceros")
         + f"<h3 style='color:#cc0000;margin:20px 0 8px'>SODI Terceros — Errores ({len(pts_st_fallidos)})</h3>"
@@ -3421,6 +3439,9 @@ def enviar_reporte(pts_aprobados, pts_fallidos, pts_omitidos,
         + "</div></body></html>"
     )
 
+    sc_fallidos_n = len(pts_sc_fallidos) if mostrar_sc else 0
+    sc_omitidos_n = len(pts_sc_omitidos) if mostrar_sc else 0
+
     if error_critico:
         asunto = f"[Reporte PTS Centrality] ERROR {fecha} {hora_ampm}"
     else:
@@ -3429,10 +3450,10 @@ def enviar_reporte(pts_aprobados, pts_fallidos, pts_omitidos,
             f" | PCCT: {len(pcct_aprobados)} aprobados"
             f" | FP: {total_fp} aprobados"
             f" | EA→OPAT: {len(pts_ea_agregados)} agregados"
-            f" | SC→OPAT: {len(pts_sc_agregados)} agregados"
-            f" | ST→OPAT: {len(pts_st_agregados)} agregados"
-            f" | {total_fallidos + len(pts_ea_fallidos) + len(pts_sc_fallidos) + len(pts_st_fallidos)} errores"
-            f" | {total_omitidos + len(pts_ea_omitidos) + len(pts_sc_omitidos) + len(pts_st_omitidos)} omitidos"
+            + (f" | SC→OPAT: {len(pts_sc_agregados)} agregados" if mostrar_sc else "")
+            + f" | ST→OPAT: {len(pts_st_agregados)} agregados"
+            f" | {total_fallidos + len(pts_ea_fallidos) + sc_fallidos_n + len(pts_st_fallidos)} errores"
+            f" | {total_omitidos + len(pts_ea_omitidos) + sc_omitidos_n + len(pts_st_omitidos)} omitidos"
         )
 
     todos = [EMAIL_DEST] + EMAIL_CC
@@ -3527,11 +3548,19 @@ async def main():
         page_neomante   = await ctx_neomante.new_page()
 
         try:
-            await asyncio.gather(
+            logins = [
                 hacer_login_centrality(page_centrality),
                 hacer_login_opat(page_opat),
-                hacer_login_neomante(page_neomante),
-            )
+            ]
+            if EJECUTAR_AVISO_CEN:
+                logins.append(hacer_login_neomante(page_neomante))
+            else:
+                print("\n[NEOMANTE] Aviso al CEN desactivado (EJECUTAR_AVISO_CEN=false) — se omite el login")
+            await asyncio.gather(*logins)
+
+            # Si el aviso CEN está desactivado, no se pasa page_neomante a aprobar_pts
+            # (que ya internamente omite crear_aviso_cen cuando neo_page es None).
+            neo_page_activo = page_neomante if EJECUTAR_AVISO_CEN else None
 
             frame = await navegar_a_permisos(page_centrality)
 
@@ -3566,7 +3595,7 @@ async def main():
             # ── PASADA 1: Revisión y Autorización PCCT (normal) ──────────────
             async def _pasada1(frm):
                 await aplicar_filtro_pcct(page_centrality, frm, ESTADO_EXACTO)
-                return await aprobar_pts(page_centrality, frm, page_opat, page_neomante, tipo_flujo="PCCT")
+                return await aprobar_pts(page_centrality, frm, page_opat, neo_page_activo, tipo_flujo="PCCT")
 
             resultado1 = await ejecutar_pasada("Pasada 1 (PCCT)", _pasada1)
             if resultado1:
@@ -3580,7 +3609,7 @@ async def main():
             async def _pasada2(frm):
                 await limpiar_filtro_pcct(page_centrality, frm)
                 await aplicar_filtro_pcct(page_centrality, frm, ESTADO_EXACTO_FP)
-                return await aprobar_pts(page_centrality, frm, page_opat, page_neomante, tipo_flujo="FP")
+                return await aprobar_pts(page_centrality, frm, page_opat, neo_page_activo, tipo_flujo="FP")
 
             resultado2 = await ejecutar_pasada("Pasada 2 (PCCT-FP)", _pasada2)
             if resultado2:
@@ -3605,31 +3634,35 @@ async def main():
             if resultado3:
                 pts_ea_agregados, pts_ea_fallidos, pts_ea_omitidos = resultado3
 
-            # ── PASADA 4: Sin Condiciones (12 horas) / Estado Aprobada ───────
+            # ── PASADA 4 (ex-Pasada 4, Sin Condiciones) ──────────────────────
+            # Sacada del flujo principal: se moverá a otro workflow aparte.
+            # Se deja el flag EJECUTAR_PASADA_SIN_CONDICIONES por si se necesita
+            # reactivar rápido mientras se termina de armar ese otro flujo.
+            if EJECUTAR_PASADA_SIN_CONDICIONES:
+                print("\n" + "="*65)
+                print("  PASADA (Sin Condiciones, 12 horas) → agregar a OPAT")
+                print("="*65)
+
+                async def _pasada_sc(frm):
+                    await aplicar_filtro_sin_condiciones(page_centrality, frm)
+                    return await procesar_sin_condiciones(page_centrality, frm, page_opat)
+
+                resultado_sc = await ejecutar_pasada("Pasada Sin Condiciones", _pasada_sc)
+                if resultado_sc:
+                    pts_sc_agregados, pts_sc_fallidos, pts_sc_omitidos = resultado_sc
+
+            # ── PASADA 4: SODI Terceros desde 01/08/2026 ─────────────────────
             print("\n" + "="*65)
-            print("  PASADA 4: Sin Condiciones (12 horas) → agregar a OPAT")
+            print("  PASADA 4: SODI Terceros → agregar a OPAT")
             print("="*65)
 
             async def _pasada4(frm):
-                await aplicar_filtro_sin_condiciones(page_centrality, frm)
-                return await procesar_sin_condiciones(page_centrality, frm, page_opat)
-
-            resultado4 = await ejecutar_pasada("Pasada 4 (Sin Condiciones)", _pasada4)
-            if resultado4:
-                pts_sc_agregados, pts_sc_fallidos, pts_sc_omitidos = resultado4
-
-            # ── PASADA 5: SODI Terceros desde 01/08/2026 ─────────────────────
-            print("\n" + "="*65)
-            print("  PASADA 5: SODI Terceros → agregar a OPAT")
-            print("="*65)
-
-            async def _pasada5(frm):
                 await aplicar_filtro_sodi_terceros(page_centrality, frm)
                 return await procesar_sodi_terceros(page_centrality, frm, page_opat)
 
-            resultado5 = await ejecutar_pasada("Pasada 5 (SODI Terceros)", _pasada5)
-            if resultado5:
-                pts_st_agregados, pts_st_fallidos, pts_st_omitidos = resultado5
+            resultado4 = await ejecutar_pasada("Pasada 4 (SODI Terceros)", _pasada4)
+            if resultado4:
+                pts_st_agregados, pts_st_fallidos, pts_st_omitidos = resultado4
 
         except Exception as e:
             error_critico = str(e)
@@ -3645,7 +3678,8 @@ async def main():
     print(f"\n{sep}")
     print(f"  {len(pts_aprobados)} aprobados | {len(pts_fallidos)} errores | {len(pts_omitidos)} omitidos")
     print(f"  {len(pts_ea_agregados)} agregados a OPAT (EA) | {len(pts_ea_fallidos)} errores | {len(pts_ea_omitidos)} omitidos")
-    print(f"  {len(pts_sc_agregados)} agregados a OPAT (SC) | {len(pts_sc_fallidos)} errores | {len(pts_sc_omitidos)} omitidos")
+    if EJECUTAR_PASADA_SIN_CONDICIONES:
+        print(f"  {len(pts_sc_agregados)} agregados a OPAT (SC) | {len(pts_sc_fallidos)} errores | {len(pts_sc_omitidos)} omitidos")
     print(f"  {len(pts_st_agregados)} agregados a OPAT (ST) | {len(pts_st_fallidos)} errores | {len(pts_st_omitidos)} omitidos")
     print(f"{sep}")
 
@@ -3654,7 +3688,7 @@ async def main():
         pts_ea_agregados, pts_ea_fallidos, pts_ea_omitidos,
         pts_sc_agregados, pts_sc_fallidos, pts_sc_omitidos,
         pts_st_agregados, pts_st_fallidos, pts_st_omitidos,
-        error_critico
+        error_critico, mostrar_sc=EJECUTAR_PASADA_SIN_CONDICIONES
     )
     print("Fin.\n")
 
