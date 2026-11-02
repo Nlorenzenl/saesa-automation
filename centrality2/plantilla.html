@@ -13,7 +13,7 @@
 :root{
   --bg:#eef1f4; --surface:#ffffff; --surface-2:#f5f7f9; --ink:#15202b; --muted:#5a6676; --line:#d9dfe6;
   --accent:#1d5a9e; --accent-ink:#ffffff; --accent-soft:#e2ebf6;
-  --e-prep:#5f6f86; --e-rev:#b7791f; --e-apr:#1f7a8c; --e-hecha:#2e7d4f; --e-anul:#9a3b3b; --e-susp:#6f52a3;
+  --e-prep:#5f6f86; --e-bandeja:#c2410c; --e-rev:#b7791f; --e-apr:#1f7a8c; --e-hecha:#2e7d4f; --e-anul:#9a3b3b; --e-susp:#6f52a3;
   --crit:#b42318; --crit-soft:#fbe9e7; --warn:#9a6700; --warn-soft:#fdf3dc; --ok:#2e7d4f;
   --f-display:"Archivo","Arial Narrow",Arial,sans-serif;
   --f-body:"IBM Plex Sans","Segoe UI",Roboto,Arial,sans-serif;
@@ -23,12 +23,12 @@
 @media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
   --bg:#0f151c; --surface:#17202a; --surface-2:#1c2733; --ink:#e4eaf1; --muted:#9aa8b8; --line:#2b3746;
   --accent:#6ea6e6; --accent-ink:#0b1622; --accent-soft:#1d2d42;
-  --e-prep:#8d9bb0; --e-rev:#e0a648; --e-apr:#4fb3c6; --e-hecha:#5cbf84; --e-anul:#d77a7a; --e-susp:#a58ad6;
+  --e-prep:#8d9bb0; --e-bandeja:#f0884f; --e-rev:#e0a648; --e-apr:#4fb3c6; --e-hecha:#5cbf84; --e-anul:#d77a7a; --e-susp:#a58ad6;
   --crit:#f08a7e; --crit-soft:#3a1f1d; --warn:#e6b450; --warn-soft:#352a14; --ok:#5cbf84; color-scheme:dark }}
 :root[data-theme="dark"]{
   --bg:#0f151c; --surface:#17202a; --surface-2:#1c2733; --ink:#e4eaf1; --muted:#9aa8b8; --line:#2b3746;
   --accent:#6ea6e6; --accent-ink:#0b1622; --accent-soft:#1d2d42;
-  --e-prep:#8d9bb0; --e-rev:#e0a648; --e-apr:#4fb3c6; --e-hecha:#5cbf84; --e-anul:#d77a7a; --e-susp:#a58ad6;
+  --e-prep:#8d9bb0; --e-bandeja:#f0884f; --e-rev:#e0a648; --e-apr:#4fb3c6; --e-hecha:#5cbf84; --e-anul:#d77a7a; --e-susp:#a58ad6;
   --crit:#f08a7e; --crit-soft:#3a1f1d; --warn:#e6b450; --warn-soft:#352a14; --ok:#5cbf84; color-scheme:dark }
 *{box-sizing:border-box}
 body{background:var(--bg);color:var(--ink);font:14px/1.5 var(--f-body);margin:0}
@@ -81,7 +81,7 @@ main .inner{display:grid;gap:14px;padding-block:4px 60px}
 .t{font-variant-numeric:tabular-nums}
 .sub{display:block;font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis}
 .desc{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-.e-prep{--e:var(--e-prep)} .e-rev{--e:var(--e-rev)} .e-apr{--e:var(--e-apr)} .e-hecha{--e:var(--e-hecha)} .e-anul{--e:var(--e-anul)} .e-susp{--e:var(--e-susp)}
+.e-prep{--e:var(--e-prep)} .e-bandeja{--e:var(--e-bandeja)} .e-rev{--e:var(--e-rev)} .e-apr{--e:var(--e-apr)} .e-hecha{--e:var(--e-hecha)} .e-anul{--e:var(--e-anul)} .e-susp{--e:var(--e-susp)}
 .pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;padding:1px 8px;border-radius:999px;background:var(--surface-2);border:1px solid var(--line);color:var(--e);white-space:nowrap}
 .pill i{width:7px;height:7px;border-radius:50%;background:var(--e)}
 .fp{font-size:10px;font-weight:700;color:var(--crit);border:1px solid currentColor;border-radius:3px;padding:0 4px;margin-left:4px;letter-spacing:.04em;vertical-align:1px}
@@ -193,8 +193,8 @@ const META = /*META*/;
 const RAW = /*DATA*/;
 (function(){
 const BASE_URL = "https://stx.saesa.cl:8091/backend/sts/";
-const ET = {prep:"En preparación", rev:"En revisión", apr:"Aprobado", hecha:"Ejecutado", susp:"Suspendido", anul:"Anulado"};
-const etapa = s => /^Revisi/.test(s) ? "rev" : /^En An/.test(s) ? "apr" : /^Hecha/.test(s) ? "hecha" : /^(Cancelada|Rechazada)/.test(s) ? "anul" : /^(Nueva|En prog)/.test(s) ? "prep" : "susp";
+const ET = {bandeja:"Bandeja de programación", prep:"En preparación", rev:"En revisión", apr:"Aprobado", hecha:"Ejecutado", susp:"Suspendido", anul:"Anulado"};
+const etapa = s => /^Revisi/.test(s) ? "rev" : /^En An/.test(s) ? "apr" : /^Hecha/.test(s) ? "hecha" : /^(Cancelada|Rechazada)/.test(s) ? "anul" : /^En programaci/.test(s) ? "bandeja" : /^Nueva/.test(s) ? "prep" : "susp";
 const SIG = {"WILSON PINO":"wpm","RODOLFO PRIETO":"rpp","CARLA RUIZ":"cro","JUAN MIRANDA":"jma","ALEXIS AEDO":"aas","NICOLAS LORENZEN":"nll","JORGE CANETE":"jcm","IGNACIO LIGUEROS":"ilb"};
 const N = s => String(s || "").toUpperCase().normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/\s+/g, " ").trim();
 const sigla = n => { const u = N(n); if (!u || u === "NULL") return ""; const w = new Set(u.split(" ")); for (const k in SIG) if (k.split(" ").every(p => w.has(p))) return SIG[k]; return String(n).trim(); };
@@ -207,11 +207,14 @@ const TODAY = META.hoy;
 const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const pill = x => `<span class="pill e-${x.e}"><i></i>${ET[x.e]}</span>`;
 const dmy = s => s.slice(8, 10) + "/" + s.slice(5, 7) + "/" + s.slice(0, 4);
-document.getElementById("syncTxt").textContent = `Actualizado desde Centrality el ${META.leido} · ${data.length} PT con inicio del ${dmy(META.desde)} al ${dmy(META.hasta)}`;
+const fueraRango = data.filter(x => x.a.date < META.desde || x.a.date > META.hasta).length;
+document.getElementById("syncTxt").textContent = `Actualizado desde Centrality el ${META.leido} · ${data.length - fueraRango} PT con inicio del ${dmy(META.desde)} al ${dmy(META.hasta)}` + (fueraRango ? ` + ${fueraRango} en bandeja con otra fecha` : "");
 const CHG = new Map((META.cambios || []).map(c => [c.pt, c]));
 
 const ALERTS = [
   {id:"cambio", cls:"warn", t:"Cambió en la última actualización", f:x => CHG.has(x.pt)},
+  {id:"bandeja", cls:"warn", t:"En bandeja de programación (sin asignar)", f:x => x.e === "bandeja"},
+  {id:"bandpas", cls:"crit", t:"En bandeja con fecha ya pasada", f:x => x.e === "bandeja" && x.a.date < TODAY},
   {id:"revpas", cls:"crit", t:"En revisión con fecha ya pasada", f:x => x.e === "rev" && x.a.date < TODAY},
   {id:"aprpas", cls:"crit", t:"Aprobado sin cerrar y fecha pasada", f:x => x.e === "apr" && x.b.date < TODAY},
   {id:"desccond", cls:"warn", t:"Desconexión sin condiciones de bloqueo", f:x => /^Desconexi/.test(x.tipoC) && !x.cond.length && !["anul"].includes(x.e)},
@@ -235,7 +238,7 @@ function rowHtml(x){
     <div class="c-marks marks">${marks}</div></div>`;
 }
 const MESES = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
-const ORDEN = {rev:0, prep:1, apr:2, susp:3, hecha:4, anul:5};
+const ORDEN = {bandeja:0, rev:0, prep:1, apr:2, susp:3, hecha:4, anul:5};
 const loaded = { has: d => d >= META.desde && d <= META.hasta };
 function calHtml(list){
   const months = []; for (let d = new Date(META.desde.slice(0, 7) + "-01T12:00:00"); d.toISOString().slice(0, 7) <= META.hasta.slice(0, 7); d.setMonth(d.getMonth() + 1)) months.push(d.toISOString().slice(0, 7));

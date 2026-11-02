@@ -3,7 +3,9 @@ Centrality 2.0 - sincronización de PT desde Centrality.
 
 Cada ejecución:
   1. Inicia sesión en Centrality (usuario y contraseña desde variables de entorno).
-  2. Lee todos los PT con inicio entre DESDE y HASTA.
+  2. Lee todos los PT con inicio entre DESDE y HASTA, más todos los PT de la
+     bandeja de programación ("En programación de trabajo - bandeja de entrada"),
+     tengan la fecha que tengan.
   3. Lee la ficha completa (condiciones y bloqueos del jefe de faena, adjuntos,
      subestación, descripción) de los PT nuevos, de los que cambiaron y de los
      que parten pronto. El resto reutiliza la ficha guardada en la ejecución anterior.
@@ -121,6 +123,18 @@ class Centrality:
             inicio += 2000
         return [f for f in filas if DESDE <= fecha_local(f.get("start_date")) <= HASTA]
 
+    def bandeja(self):
+        """PT sin asignar en la bandeja de entrada de Planificación, de cualquier fecha."""
+        filas, inicio = [], 0
+        while True:
+            j = self.post("svc_dms_scheduling.php", {"start": str(inicio), "limit": "1000", "sort": "start_date", "dir": "ASC",
+                                                     "filter": "", "action": "list_unassigned_operation_orders", "realtime": "1"}, timeout=180)
+            datos = j.get("data") or []
+            filas.extend(datos)
+            if len(datos) < 1000:
+                return filas
+            inicio += 1000
+
     def ficha(self, pt_id):
         j = self.post("svc_dms_operation_order.php", {"action": "get_operation_order_info", "operation_order_id": str(pt_id)}, timeout=60)
         return j.get("data") or {}
@@ -149,6 +163,10 @@ def con_ficha(base, d):
     return base
 
 
+def en_rango(iso):
+    return DESDE <= fecha_local(iso) <= HASTA
+
+
 def comparar(prev, nuevo):
     cambios = []
     for pt, x in nuevo.items():
@@ -170,7 +188,8 @@ def comparar(prev, nuevo):
             cambios.append({"pt": pt, "tipo": "programador", "txt": f"Programador: {p.get('prog') or 'sin asignar'} → {x.get('prog')}", "estado": x["estado"], "ini": x["ini"]})
     for pt, p in prev.items():
         if pt not in nuevo:
-            cambios.append({"pt": pt, "tipo": "salio", "txt": "Ya no tiene fecha de inicio dentro del rango", "estado": p.get("estado"), "ini": p.get("ini")})
+            txt = "Ya no tiene fecha de inicio dentro del rango" if en_rango(p.get("ini")) else "Salió de la bandeja de programación (fecha fuera del rango)"
+            cambios.append({"pt": pt, "tipo": "salio", "txt": txt, "estado": p.get("estado"), "ini": p.get("ini")})
     return cambios
 
 
@@ -225,7 +244,7 @@ def enviar_correo(cambios, pts, leido, adjunto, primera=False):
     cuerpo = f"""<html><body style="font-family:Arial,sans-serif;color:#1c2430;max-width:860px">
 <h2 style="margin:0 0 4px">Centrality 2.0 · actualización {leido}</h2>
 {enlace}
-<p style="margin:0 0 14px;color:#555">PT con inicio del {DESDE[8:]}/{DESDE[5:7]}/{DESDE[:4]} al {HASTA[8:]}/{HASTA[5:7]}/{HASTA[:4]}: {len(pts)} en total. {'Primera carga: desde la próxima actualización este correo muestra los cambios.' if primera else ('Sin cambios desde la actualización anterior.' if not total_cambios else f'{total_cambios} cambios desde la actualización anterior.')}</p>
+<p style="margin:0 0 14px;color:#555">PT con inicio del {DESDE[8:]}/{DESDE[5:7]}/{DESDE[:4]} al {HASTA[8:]}/{HASTA[5:7]}/{HASTA[:4]}: {sum(1 for x in pts.values() if en_rango(x.get('ini')))} en total{f", más {fuera} en la bandeja de programación con otra fecha" if (fuera := sum(1 for x in pts.values() if not en_rango(x.get('ini')))) else ""}. {'Primera carga: desde la próxima actualización este correo muestra los cambios.' if primera else ('Sin cambios desde la actualización anterior.' if not total_cambios else f'{total_cambios} cambios desde la actualización anterior.')}</p>
 {bloques}
 <h3 style="margin:22px 0 6px;color:#1d5a9e">PT por estado en Centrality</h3>
 <table style="border-collapse:collapse;font-size:13px">{resumen_estados}</table>
@@ -263,6 +282,17 @@ def main():
     c.login()
     lista = c.todos()
     log(f"{len(lista)} PT con inicio entre {DESDE} y {HASTA}")
+    ids = {x.get("business_id") for x in lista}
+    try:
+        bandeja = c.bandeja()
+        extra = [x for x in bandeja if x.get("business_id") not in ids]
+        log(f"{len(bandeja)} PT en la bandeja de programación; {len(extra)} con fecha fuera del rango se agregan a la agenda")
+    except Exception as e:
+        # Si falla la bandeja, se mantienen los de la foto anterior para no reportarlos como salidos.
+        extra = []
+        guardados = [p for p in prev.values() if not en_rango(p.get("ini")) and p["pt"] not in ids]
+        log(f"No se pudo leer la bandeja ({str(e)[:100]}); se mantienen {len(guardados)} PT de la foto anterior")
+    lista += extra
 
     hoy = datetime.now(TZ).date()
     ventana = (str(hoy - timedelta(days=VENTANA_DIAS_ATRAS)), str(hoy + timedelta(days=VENTANA_DIAS_ADELANTE)))
@@ -279,6 +309,9 @@ def main():
                 if k in p:
                     b[k] = p[k]
         nuevo[b["pt"]] = b
+    if "guardados" in locals():
+        for p in guardados:
+            nuevo[p["pt"]] = p
     log(f"Fichas a leer: {len(pendientes)} (el resto se reutiliza)")
 
     errores = []
