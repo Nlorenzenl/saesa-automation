@@ -1,0 +1,112 @@
+name: Centrality 2.0
+on:
+  schedule:
+    # Cada 3 horas a las 01, 04, 07, 10, 13, 16, 19 y 22 UTC
+    # (Chile en verano: 22, 01, 04, 07, 10, 13, 16 y 19 h).
+    # Evita chocar con "SAESA Diario" (20:00 UTC, lunes a viernes), que usa el mismo usuario de Centrality.
+    - cron: "0 1-22/3 * * *"
+  workflow_dispatch:
+    inputs:
+      full_refresh:
+        description: "Volver a leer la ficha completa de todos los PT"
+        type: boolean
+        default: false
+      sin_correo:
+        description: "No enviar correo (prueba)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: centrality2
+  cancel-in-progress: false
+
+jobs:
+  sincronizar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      CENTRALITY2_CLAVE: ${{ secrets.CENTRALITY2_CLAVE }}
+    steps:
+      - name: Descargar repo
+        uses: actions/checkout@v4
+
+      - name: Revisar secretos
+        run: |
+          if [ -z "$CENTRALITY2_CLAVE" ]; then
+            echo "::error::Falta el secreto CENTRALITY2_CLAVE (contraseña de la página). Ver centrality2/LEEME.md"
+            exit 1
+          fi
+
+      - name: Recuperar la foto anterior (rama centrality2-datos, cifrada)
+        run: |
+          if git ls-remote --exit-code --heads origin centrality2-datos > /dev/null; then
+            git fetch --depth 1 origin centrality2-datos
+            git show FETCH_HEAD:datos.tar.gz.enc > /tmp/datos.tar.gz.enc
+            if openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass env:CENTRALITY2_CLAVE -in /tmp/datos.tar.gz.enc | tar xzf - -C centrality2; then
+              echo "Foto anterior recuperada"
+            else
+              echo "::warning::No se pudo descifrar la foto anterior (¿cambió la contraseña?). Se hará una carga completa."
+              rm -rf centrality2/datos
+            fi
+          else
+            echo "Primera ejecución: no hay foto anterior"
+          fi
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependencias
+        run: pip install requests tzdata cryptography
+
+      - name: Sincronizar con Centrality
+        run: python centrality2/sync_centrality.py
+        env:
+          SAESA_USER: ${{ secrets.SAESA_USER }}
+          SAESA_PASS: ${{ secrets.SAESA_PASS }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASS: ${{ secrets.GMAIL_APP_PASS }}
+          EMAIL_DEST: ${{ secrets.EMAIL_DEST }}
+          EMAIL_CC: ${{ secrets.CENTRALITY2_EMAIL_CC }}
+          PAGINA_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/
+          DESDE: "2026-09-01"
+          HASTA: "2026-12-31"
+          FULL_REFRESH: ${{ inputs.full_refresh || 'false' }}
+          SIN_CORREO: ${{ inputs.sin_correo || 'false' }}
+
+      - name: Cifrar la agenda para la web
+        run: python centrality2/encriptar_pagina.py centrality2/site/index.html public/index.html
+
+      - name: Guardar la foto cifrada (rama centrality2-datos, sin historial)
+        run: |
+          mkdir -p /tmp/salida
+          tar czf - -C centrality2 datos | openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:CENTRALITY2_CLAVE -out /tmp/salida/datos.tar.gz.enc
+          cd /tmp/salida
+          git init -q -b centrality2-datos
+          git config user.name "centrality2-bot"
+          git config user.email "centrality2-bot@users.noreply.github.com"
+          git add -A
+          git commit -qm "Actualización $(TZ=America/Santiago date '+%d/%m/%Y %H:%M')"
+          git push -qf "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" centrality2-datos
+
+      - name: Preparar la página para GitHub Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+  publicar:
+    needs: sincronizar
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Publicar en GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4
