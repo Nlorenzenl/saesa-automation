@@ -15,6 +15,10 @@ on:
         description: "No enviar correo (prueba)"
         type: boolean
         default: false
+      prueba_correo:
+        description: "Solo enviar 3 correos de prueba (no lee Centrality ni publica)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -79,11 +83,17 @@ jobs:
           HASTA: "2026-12-31"
           FULL_REFRESH: ${{ inputs.full_refresh || 'false' }}
           SIN_CORREO: ${{ inputs.sin_correo || 'false' }}
+          PRUEBA_CORREO: ${{ inputs.prueba_correo || 'false' }}
+
+      # En modo prueba de correo no se publica nada: los pasos siguientes se saltan
+      # y el trabajo "publicar" tampoco corre.
 
       - name: Cifrar la agenda para la web
+        if: ${{ !inputs.prueba_correo }}
         run: python centrality2/encriptar_pagina.py centrality2/site/index.html public/index.html
 
       - name: Guardar la foto cifrada (rama centrality2-datos, sin historial)
+        if: ${{ !inputs.prueba_correo }}
         run: |
           mkdir -p /tmp/salida
           tar czf - -C centrality2 datos | openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:CENTRALITY2_CLAVE -out /tmp/salida/datos.tar.gz.enc
@@ -96,12 +106,14 @@ jobs:
           git push -qf "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" centrality2-datos
 
       - name: Preparar la página para GitHub Pages
+        if: ${{ !inputs.prueba_correo }}
         uses: actions/upload-pages-artifact@v3
         with:
           path: public
 
   publicar:
     needs: sincronizar
+    if: ${{ !inputs.prueba_correo }}
     runs-on: ubuntu-latest
     environment:
       name: github-pages
