@@ -229,7 +229,7 @@ def enviar_correo(cambios, pts, leido, adjunto, primera=False):
 {bloques}
 <h3 style="margin:22px 0 6px;color:#1d5a9e">PT por estado en Centrality</h3>
 <table style="border-collapse:collapse;font-size:13px">{resumen_estados}</table>
-<p style="color:#777;font-size:12px;margin-top:20px">La agenda completa va adjunta (centrality_2_0.html): ábrela en el navegador.</p>
+<p style="color:#777;font-size:12px;margin-top:20px">{'La agenda completa está en la web (botón de arriba). Pide la contraseña del equipo.' if url else 'La agenda completa va adjunta (centrality_2_0.html): ábrela en el navegador.'}</p>
 </body></html>"""
     msg = MIMEMultipart()
     corto = {"estado": "cambios de estado", "nuevo": "PT nuevos", "fecha": "cambios de fecha"}
@@ -238,9 +238,12 @@ def enviar_correo(cambios, pts, leido, adjunto, primera=False):
     if cc:
         msg["Cc"] = ", ".join(cc)
     msg.attach(MIMEText(cuerpo, "html", "utf-8"))
-    parte = MIMEApplication(adjunto.read_bytes(), Name="centrality_2_0.html")
-    parte["Content-Disposition"] = 'attachment; filename="centrality_2_0.html"'
-    msg.attach(parte)
+    # Los servidores de correo corporativos suelen bloquear adjuntos .html grandes;
+    # si hay página web, el correo lleva solo el enlace.
+    if not url or os.environ.get("ADJUNTAR_HTML", "false").lower() == "true":
+        parte = MIMEApplication(adjunto.read_bytes(), Name="centrality_2_0.html")
+        parte["Content-Disposition"] = 'attachment; filename="centrality_2_0.html"'
+        msg.attach(parte)
     with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=60) as s:
         s.login(usuario, clave)
         s.sendmail(usuario, [dest] + cc, msg.as_string())
