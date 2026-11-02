@@ -272,6 +272,7 @@ def enviar_correo(cambios, pts, leido, adjunto, primera=False):
 def correos_de_prueba():
     """Envía 3 correos cortos para ver cuál bloquea el servidor del destinatario."""
     usuario, clave, dest = os.environ.get("GMAIL_USER"), os.environ.get("GMAIL_APP_PASS"), os.environ.get("EMAIL_DEST")
+    cc = [c.strip() for c in os.environ.get("EMAIL_CC", "").split(",") if c.strip()]
     url = os.environ.get("PAGINA_URL", "")
     hora = datetime.now(TZ).strftime("%d/%m/%Y %H:%M")
     boton = f'<p><a href="{escape(url)}" style="background:#1d5a9e;color:#fff;padding:8px 14px;border-radius:6px;text-decoration:none;display:inline-block">Abrir la agenda en la web</a></p>'
@@ -285,9 +286,11 @@ def correos_de_prueba():
         for tipo, asunto, cuerpo in pruebas:
             msg = MIMEMultipart(tipo)
             msg["Subject"], msg["From"], msg["To"] = asunto, usuario, dest
+            if cc:
+                msg["Cc"] = ", ".join(cc)
             msg.attach(MIMEText(cuerpo, "html", "utf-8"))
-            s.sendmail(usuario, dest, msg.as_string())
-            log(f"Enviado: {asunto}")
+            s.sendmail(usuario, [dest] + cc, msg.as_string())
+            log(f"Enviado: {asunto}" + (f" (con copia a {len(cc)})" if cc else " (sin copias: falta el secreto CENTRALITY2_EMAIL_CC)"))
 
 
 def main():
