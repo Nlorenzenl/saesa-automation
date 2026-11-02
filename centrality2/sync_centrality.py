@@ -269,7 +269,31 @@ def enviar_correo(cambios, pts, leido, adjunto, primera=False):
     log(f"Correo enviado a {dest}" + (f" con copia a {len(cc)}" if cc else ""))
 
 
+def correos_de_prueba():
+    """Envía 3 correos cortos para ver cuál bloquea el servidor del destinatario."""
+    usuario, clave, dest = os.environ.get("GMAIL_USER"), os.environ.get("GMAIL_APP_PASS"), os.environ.get("EMAIL_DEST")
+    url = os.environ.get("PAGINA_URL", "")
+    hora = datetime.now(TZ).strftime("%d/%m/%Y %H:%M")
+    boton = f'<p><a href="{escape(url)}" style="background:#1d5a9e;color:#fff;padding:8px 14px;border-radius:6px;text-decoration:none;display:inline-block">Abrir la agenda en la web</a></p>'
+    pruebas = [
+        ("alternative", f"Prueba 1 Centrality {hora}", "<p>Prueba 1: mismo formato que SAESA Diario, sin enlaces.</p>"),
+        ("alternative", f"Prueba 2 Centrality {hora}", f"<p>Prueba 2: igual a la 1, pero con el enlace a la agenda.</p>{boton}"),
+        ("mixed", f"[Centrality 2.0] {hora} · prueba 3", f"<h2>Centrality 2.0 · prueba 3</h2>{boton}<p>Prueba 3: mismo formato que el reporte real.</p>"),
+    ]
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=60) as s:
+        s.login(usuario, clave)
+        for tipo, asunto, cuerpo in pruebas:
+            msg = MIMEMultipart(tipo)
+            msg["Subject"], msg["From"], msg["To"] = asunto, usuario, dest
+            msg.attach(MIMEText(cuerpo, "html", "utf-8"))
+            s.sendmail(usuario, dest, msg.as_string())
+            log(f"Enviado: {asunto}")
+
+
 def main():
+    if os.environ.get("PRUEBA_CORREO", "false").lower() == "true":
+        correos_de_prueba()
+        return
     t0 = time.time()
     usuario, clave = os.environ.get("SAESA_USER"), os.environ.get("SAESA_PASS")
     if not usuario or not clave:

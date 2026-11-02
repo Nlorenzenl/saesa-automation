@@ -67,9 +67,10 @@ Desde ahí corre sola cada 3 horas.
 ## Qué hace cada ejecución
 
 - Lee todos los PT con inicio entre `DESDE` y `HASTA` (hoy 01/09/2026 a 31/12/2026; se cambian en el workflow).
+- Suma todos los PT de la bandeja de programación ("En programación de trabajo - bandeja de entrada"), aunque su fecha esté fuera del rango. En la agenda aparecen como etapa **Bandeja de programación**.
 - Lee la ficha completa (subestación, descripción, condiciones y bloqueos, adjuntos) de los PT nuevos, de los que cambiaron y de los que parten entre 3 días atrás y 14 días adelante. El resto usa la ficha guardada.
 - Detecta PT nuevos, cambios de estado, de fechas y de programador, y PT que salieron del rango.
-- Publica la agenda cifrada en GitHub Pages y la envía también adjunta (sin cifrar) en el correo.
+- Publica la agenda cifrada en GitHub Pages. El correo lleva el resumen de cambios y el enlace a la página, sin adjunto (los correos corporativos suelen bloquear adjuntos .html grandes).
 
 ## Tiempos
 
