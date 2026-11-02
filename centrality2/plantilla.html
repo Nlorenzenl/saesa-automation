@@ -128,6 +128,10 @@ main .inner{display:grid;gap:14px;padding-block:4px 60px}
 .daylink:focus-visible{outline:2px solid var(--accent)}
 .nodata{font-size:11px;color:var(--muted)}
 .dayfilter{display:inline-flex;align-items:center;gap:6px}
+.fechas{display:inline-flex;flex-wrap:wrap;align-items:center;gap:6px}
+.fechas label{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--muted)}
+input.fecha{border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:var(--r);padding:5px 8px;font:13px var(--f-body);color-scheme:light dark}
+.fechas .chip[aria-pressed=true]{font-weight:600}
 .drawer{position:fixed;top:0;right:0;bottom:0;width:min(560px,100%);background:var(--surface);border-left:1px solid var(--line);box-shadow:-10px 0 30px rgba(0,0,0,.2);z-index:30;display:grid;grid-template-rows:auto auto 1fr;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);padding-right:env(safe-area-inset-right,0px)}
 .drawer > header{padding:14px 16px;display:grid;gap:8px;border-bottom:1px solid var(--line)}
 .drawer .r1{display:flex;justify-content:space-between;align-items:start;gap:10px}
@@ -162,7 +166,14 @@ a{color:var(--accent)}
 
 <div class="toolbar g"><div class="inner">
   <div class="seg" role="group" aria-label="Vista"><button id="vTabla" aria-pressed="true">Tabla</button><button id="vCal" aria-pressed="false">Calendario</button></div>
-  <span class="dayfilter" id="dayFilter" hidden></span>
+  <div class="fechas" role="group" aria-label="Fechas">
+    <label title="Fecha de inicio del PT">Inicio desde <input type="date" class="fecha" id="fDesde"></label>
+    <label>Hasta <input type="date" class="fecha" id="fHasta"></label>
+    <button class="chip" data-rango="hoy" aria-pressed="false">Hoy</button>
+    <button class="chip" data-rango="manana" aria-pressed="false">Mañana</button>
+    <button class="chip" data-rango="semana" aria-pressed="false">Próximos 7 días</button>
+    <button class="chip" id="fQuitar" hidden>Quitar fechas</button>
+  </div>
   <div class="chips" id="zonas" role="group" aria-label="Zona"></div>
   <div class="chips" id="etapas" role="group" aria-label="Etapa"></div>
   <select class="sel" id="tipo" aria-label="Tipo de PT"><option value="">Todos los tipos</option></select>
@@ -221,8 +232,11 @@ const ALERTS = [
   {id:"fp", cls:"warn", t:"Fuera de plazo", f:x => x.fp},
   {id:"prog", cls:"", t:"Sin programador", f:x => !x.sig && !["anul"].includes(x.e)}
 ];
-const S = {z:new Set(), e:new Set(), tipo:"", prog:"", fp:false, adj:false, al:"", q:"", view:"tabla", dia:"", closed:new Set(), shown:{}};
-const filtered = () => { const q = S.q.toLowerCase(); const al = ALERTS.find(a => a.id === S.al); return data.filter(x => (!S.z.size || S.z.has(x.zg)) && (!S.e.size || S.e.has(x.e)) && (!S.tipo || x.tipoC === S.tipo) && (!S.prog || x.sig === S.prog) && (!S.fp || x.fp) && (!S.adj || x.adj.length) && (!al || al.f(x)) && (!q || x.hay.includes(q))); };
+const S = {z:new Set(), e:new Set(), tipo:"", prog:"", fp:false, adj:false, al:"", q:"", view:"tabla", d1:"", d2:"", closed:new Set(), shown:{}};
+const filtered = () => { const q = S.q.toLowerCase(); const al = ALERTS.find(a => a.id === S.al); return data.filter(x => (!S.z.size || S.z.has(x.zg)) && (!S.e.size || S.e.has(x.e)) && (!S.tipo || x.tipoC === S.tipo) && (!S.prog || x.sig === S.prog) && (!S.fp || x.fp) && (!S.adj || x.adj.length) && (!al || al.f(x)) && (!q || x.hay.includes(q)) && (!S.d1 || x.a.date >= S.d1) && (!S.d2 || x.a.date <= S.d2)); };
+// "Hoy" según el reloj de quien mira la página (hora de Chile), no la fecha de la última lectura.
+const hoyCL = (dias = 0) => new Intl.DateTimeFormat("en-CA", {timeZone:"America/Santiago"}).format(new Date(Date.now() + dias * 864e5));
+const rango = r => r === "hoy" ? [hoyCL(), hoyCL()] : r === "manana" ? [hoyCL(1), hoyCL(1)] : [hoyCL(), hoyCL(6)];
 const DAYN = ["domingo","lunes","martes","miércoles","jueves","viernes","sábado"];
 function rowHtml(x){
   const marks = [x.cond.length ? `<span class="mk on" title="Condiciones y bloqueos">${x.cond.length} cond.</span>` : '', x.adj.length ? `<span class="mk on" title="Archivos adjuntos">${x.adj.length} adj.</span>` : ''].join("") || '<span class="muted">—</span>';
@@ -266,10 +280,12 @@ function calHtml(list){
 function render(){
   document.getElementById("alerts").innerHTML = ALERTS.map(a => `<button class="al ${a.cls}" data-al="${a.id}" aria-pressed="${S.al === a.id}"><b>${a.t}</b><span>${S.al === a.id ? "Filtrando · clic para quitar" : "Clic para filtrar"}</span><em>${data.filter(a.f).length}</em></button>`).join("");
   const list = filtered(); document.getElementById("count").textContent = `${list.length} de ${data.length} PT`;
-  const df = document.getElementById("dayFilter");
-  if (S.view === "tabla" && S.dia){ df.hidden = false; df.innerHTML = `<button class="chip" aria-pressed="true" data-cleardia="1">Día ${S.dia.slice(8)}/${S.dia.slice(5, 7)} · quitar</button>`; } else { df.hidden = true; df.innerHTML = ""; }
+  document.getElementById("fDesde").value = S.d1; document.getElementById("fHasta").value = S.d2;
+  document.getElementById("fQuitar").hidden = !(S.d1 || S.d2);
+  document.querySelectorAll("[data-rango]").forEach(b => { const r = rango(b.dataset.rango); b.setAttribute("aria-pressed", S.d1 === r[0] && S.d2 === r[1]); });
   if (S.view === "cal"){ document.getElementById("days").innerHTML = calHtml(list); return; }
-  const dates = [...new Set(data.map(x => x.a.date))].sort().filter(dt => !S.dia || dt === S.dia);
+  // El filtro de fechas usa la fecha de inicio (como "Desde" en Centrality); solo aparecen los días con PT.
+  const dates = [...new Set((S.d1 || S.d2 ? list : data).map(x => x.a.date))].sort();
   document.getElementById("days").innerHTML = dates.map(dt => {
     const all = data.filter(x => x.a.date === dt); const items = list.filter(x => x.a.date === dt).sort((p, q) => p.a.hm.localeCompare(q.a.hm) || p.pt.localeCompare(q.pt));
     const cnt = {}; all.forEach(x => cnt[x.e] = (cnt[x.e] || 0) + 1);
@@ -285,9 +301,11 @@ addOpts("tipo", [...new Set(data.map(x => x.tipoC))].sort());
 addOpts("prog", [...new Set(data.map(x => x.sig).filter(Boolean))].sort());
 document.addEventListener("click", ev => {
   const t = ev.target;
-  const z = t.closest("[data-z]"), e = t.closest("[data-e]"), al = t.closest("[data-al]"), mo = t.closest("[data-more]"), dy = t.closest("[data-day]"), pt = t.closest("[data-pt]"), dl = t.closest("[data-dia]"), cd = t.closest("[data-cleardia]");
-  if (dl){ S.dia = dl.dataset.dia; setView("tabla"); window.scrollTo({top: 0}); }
-  else if (cd){ S.dia = ""; render(); }
+  const z = t.closest("[data-z]"), e = t.closest("[data-e]"), al = t.closest("[data-al]"), mo = t.closest("[data-more]"), dy = t.closest("[data-day]"), pt = t.closest("[data-pt]"), dl = t.closest("[data-dia]");
+  const rg = t.closest("[data-rango]");
+  if (dl){ S.d1 = S.d2 = dl.dataset.dia; setView("tabla"); window.scrollTo({top: 0}); }
+  else if (rg){ [S.d1, S.d2] = rango(rg.dataset.rango); render(); }
+  else if (t.closest("#fQuitar")){ S.d1 = S.d2 = ""; render(); }
   else if (z){ const v = z.dataset.z; S.z.has(v) ? S.z.delete(v) : S.z.add(v); z.setAttribute("aria-pressed", S.z.has(v)); render(); }
   else if (e){ const v = e.dataset.e; S.e.has(v) ? S.e.delete(v) : S.e.add(v); e.setAttribute("aria-pressed", S.e.has(v)); render(); }
   else if (al){ S.al = S.al === al.dataset.al ? "" : al.dataset.al; render(); }
@@ -295,7 +313,9 @@ document.addEventListener("click", ev => {
   else if (dy){ const v = dy.dataset.day; S.closed.has(v) ? S.closed.delete(v) : S.closed.add(v); render(); }
   else if (pt && !t.closest("#drawer")) openPT(pt.dataset.pt);
 });
-document.addEventListener("keydown", ev => { if (ev.key === "Enter" && ev.target.matches(".cell[data-dia]")) { S.dia = ev.target.dataset.dia; setView("tabla"); window.scrollTo({top: 0}); } if (ev.key === "Enter" && ev.target.matches(".row[data-pt]")) openPT(ev.target.dataset.pt); if (ev.key === "Escape") drawer.hidden = true; });
+document.addEventListener("keydown", ev => { if (ev.key === "Enter" && ev.target.matches(".cell[data-dia]")) { S.d1 = S.d2 = ev.target.dataset.dia; setView("tabla"); window.scrollTo({top: 0}); } if (ev.key === "Enter" && ev.target.matches(".row[data-pt]")) openPT(ev.target.dataset.pt); if (ev.key === "Escape") drawer.hidden = true; });
+document.getElementById("fDesde").addEventListener("change", ev => { S.d1 = ev.target.value; if (S.d2 && S.d1 > S.d2) S.d2 = S.d1; render(); });
+document.getElementById("fHasta").addEventListener("change", ev => { S.d2 = ev.target.value; if (S.d1 && S.d2 < S.d1) S.d1 = S.d2; render(); });
 document.getElementById("q").addEventListener("input", ev => { S.q = ev.target.value; render(); });
 document.getElementById("tipo").addEventListener("change", ev => { S.tipo = ev.target.value; render(); });
 document.getElementById("prog").addEventListener("change", ev => { S.prog = ev.target.value; render(); });
@@ -303,7 +323,7 @@ document.getElementById("soloFp").addEventListener("click", ev => { S.fp = !S.fp
 document.getElementById("conAdj").addEventListener("click", ev => { S.adj = !S.adj; ev.currentTarget.setAttribute("aria-pressed", S.adj); render(); });
 const vT = document.getElementById("vTabla"), vC = document.getElementById("vCal");
 function setView(v){ S.view = v; vT.setAttribute("aria-pressed", v === "tabla"); vC.setAttribute("aria-pressed", v === "cal"); try { localStorage.setItem("c2vista", v); } catch (e) {} render(); }
-vT.onclick = () => { S.dia = ""; setView("tabla"); };
+vT.onclick = () => setView("tabla");
 vC.onclick = () => setView("cal");
 try { const v = localStorage.getItem("c2vista"); if (v === "cal") { S.view = "cal"; vT.setAttribute("aria-pressed", "false"); vC.setAttribute("aria-pressed", "true"); } } catch (e) {}
 
