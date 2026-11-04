@@ -66,7 +66,7 @@ Desde ahí corre sola cada 3 horas.
 
 ## Qué hace cada ejecución
 
-- Lee todos los PT con inicio entre `DESDE` y `HASTA` (hoy 01/09/2026 a 31/12/2026; se cambian en el workflow).
+- Lee todos los PT con inicio entre `DESDE` y `HASTA` (hoy 01/06/2026 a 31/12/2026; se cambian en el workflow).
 - Suma todos los PT de la bandeja de programación ("En programación de trabajo - bandeja de entrada"), aunque su fecha esté fuera del rango. En la agenda aparecen como etapa **Bandeja de programación**.
 - Lee la ficha completa (subestación, descripción, condiciones y bloqueos, adjuntos) de los PT nuevos, de los que cambiaron y de los que parten entre 3 días atrás y 14 días adelante. El resto usa la ficha guardada.
 - Detecta PT nuevos, cambios de estado, de fechas y de programador, y PT que salieron del rango.
@@ -74,7 +74,7 @@ Desde ahí corre sola cada 3 horas.
 
 ## Tiempos
 
-- Primera carga (01/09 a 31/12): unos 60 minutos.
+- Primera carga (01/06 a 31/12): entre 1 y 2 horas.
 - Ejecuciones siguientes: pocos minutos.
 - Para releer todas las fichas: Run workflow con "Volver a leer la ficha completa".
 - GitHub puede atrasar las ejecuciones programadas entre 5 y 30 minutos en horas de alta demanda.
