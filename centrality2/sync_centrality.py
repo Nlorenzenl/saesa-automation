@@ -135,6 +135,12 @@ class Centrality:
                 return filas
             inicio += 1000
 
+    def aprobaciones(self, pt_id):
+        """Registro del circuito de aprobaciones, tal como lo entrega Centrality (del más reciente al más antiguo)."""
+        j = self.post("svc_dms_scheduling.php", {"start": "0", "limit": "500", "action": "list_approval_circuit_log",
+                                                 "operation_order_id": str(pt_id), "realtime": "1"}, timeout=60)
+        return j.get("data") or []
+
     def ficha(self, pt_id):
         j = self.post("svc_dms_operation_order.php", {"action": "get_operation_order_info", "operation_order_id": str(pt_id)}, timeout=60)
         return j.get("data") or {}
@@ -146,6 +152,12 @@ def de_lista(x):
             "tipo": x.get("operation_order_kind"), "estado": x.get("state_caption"), "prog": x.get("work_programmer_name"),
             "fp": x.get("alternative_approval_circuit") is True or any("fuera de plazo" in (b.get("tooltip") or "").lower() for b in (x.get("badges") or [])),
             "desc": x.get("work_description") or "", "creador": x.get("creator_name") or "", "solicitante": x.get("applicant") or ""}
+
+
+def de_aprobaciones(filas):
+    """[fecha, paso, usuario, acción, comentario] por cada registro."""
+    limpia = lambda v: "" if v in (None, "null") else str(v)
+    return [[limpia(a.get(k)) for k in ("event_date", "step_name", "person_name", "action", "comments")] for a in filas]
 
 
 def con_ficha(base, d):
@@ -323,7 +335,7 @@ def main():
 
     hoy = datetime.now(TZ).date()
     ventana = (str(hoy - timedelta(days=VENTANA_DIAS_ATRAS)), str(hoy + timedelta(days=VENTANA_DIAS_ADELANTE)))
-    nuevo, pendientes = {}, []
+    nuevo, pendientes, solo_apr = {}, [], []
     for x in lista:
         b = de_lista(x)
         p = prev.get(b["pt"])
@@ -332,33 +344,51 @@ def main():
         if FULL or cambio or cerca or not (p and p.get("ficha_leida")):
             pendientes.append(b)
         else:
-            for k in ("ref", "caso", "cond", "adj", "ficha_leida", "desc", "creador", "solicitante"):
+            for k in ("ref", "caso", "cond", "adj", "apr", "ficha_leida", "desc", "creador", "solicitante"):
                 if k in p:
                     b[k] = p[k]
+            if "apr" not in b:
+                solo_apr.append(b)
         nuevo[b["pt"]] = b
     if "guardados" in locals():
         for p in guardados:
             nuevo[p["pt"]] = p
-    log(f"Fichas a leer: {len(pendientes)} (el resto se reutiliza)")
+    log(f"Fichas a leer: {len(pendientes)} (el resto se reutiliza)" + (f"; registros de aprobaciones por completar: {len(solo_apr)}" if solo_apr else ""))
 
     errores = []
 
     def leer(b):
         try:
-            return con_ficha(b, c.ficha(b["id"]))
+            con_ficha(b, c.ficha(b["id"]))
         except Exception as e:
             errores.append((b["pt"], str(e)[:120]))
             p = prev.get(b["pt"]) or {}
             for k in ("ref", "caso", "cond", "adj", "ficha_leida"):
                 if k in p:
                     b[k] = p[k]
-            return b
+        leer_apr(b)
+        return b
+
+    def leer_apr(b):
+        try:
+            b["apr"] = de_aprobaciones(c.aprobaciones(b["id"]))
+        except Exception as e:
+            errores.append((b["pt"], "aprobaciones: " + str(e)[:100]))
+            p = prev.get(b["pt"]) or {}
+            if "apr" in p:
+                b["apr"] = p["apr"]
+        return b
 
     with ThreadPoolExecutor(HILOS) as ex:
         for i, b in enumerate(ex.map(leer, pendientes), 1):
             nuevo[b["pt"]] = b
             if i % 200 == 0:
                 log(f"  {i}/{len(pendientes)} fichas")
+    if solo_apr:
+        with ThreadPoolExecutor(HILOS) as ex:
+            for i, b in enumerate(ex.map(leer_apr, solo_apr), 1):
+                if i % 500 == 0:
+                    log(f"  {i}/{len(solo_apr)} registros de aprobaciones")
     if errores:
         log(f"{len(errores)} fichas no se pudieron leer; se usó la versión anterior. Ejemplos: {errores[:3]}")
 

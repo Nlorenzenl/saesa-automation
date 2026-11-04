@@ -83,7 +83,19 @@ main .inner{display:grid;gap:14px;padding-block:4px 60px}
 .desc{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .e-prep{--e:var(--e-prep)} .e-bandeja{--e:var(--e-bandeja)} .e-rev{--e:var(--e-rev)} .e-apr{--e:var(--e-apr)} .e-hecha{--e:var(--e-hecha)} .e-anul{--e:var(--e-anul)} .e-susp{--e:var(--e-susp)}
 .pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;padding:1px 8px;border-radius:999px;background:var(--surface-2);border:1px solid var(--line);color:var(--e);white-space:nowrap}
-.pill i{width:7px;height:7px;border-radius:50%;background:var(--e)}
+.pill i{width:7px;height:7px;border-radius:50%;background:var(--e);flex:none}
+.c-est .pill,#dPills .pill{white-space:normal;align-items:baseline;line-height:1.3;padding:2px 8px}
+.estsel{position:relative}
+.estsel summary{list-style:none;cursor:pointer;border:1px solid var(--line);background:var(--surface);border-radius:var(--r);padding:6px 10px;font-size:13px;white-space:nowrap}
+.estsel summary::-webkit-details-marker{display:none}
+.estsel[open] summary,.estsel.on summary{border-color:var(--ink)}
+.estsel .panel{position:absolute;z-index:30;top:calc(100% + 4px);left:0;width:min(420px,calc(100vw - 32px));max-height:60vh;overflow:auto;background:var(--surface);border:1px solid var(--line);border-radius:var(--r);box-shadow:0 8px 24px rgba(0,0,0,.15);padding:8px}
+.estsel .grp{font:600 11px var(--f-body);text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin:8px 4px 4px;display:flex;align-items:center;gap:6px}
+.estsel .grp i{width:8px;height:8px;border-radius:50%}
+.estsel label{display:grid;grid-template-columns:auto 1fr auto;gap:8px;align-items:center;padding:4px;border-radius:4px;font-size:13px;cursor:pointer}
+.estsel label:hover{background:var(--surface-2)}
+.estsel label em{font-style:normal;color:var(--muted);font-variant-numeric:tabular-nums}
+.estsel .acc{display:flex;gap:6px;justify-content:flex-end;border-top:1px solid var(--line);margin-top:6px;padding-top:6px}
 .fp{font-size:10px;font-weight:700;color:var(--crit);border:1px solid currentColor;border-radius:3px;padding:0 4px;margin-left:4px;letter-spacing:.04em;vertical-align:1px}
 .mk{font-size:11px;font-weight:600;padding:0 5px;border-radius:3px;border:1px solid var(--line);color:var(--muted);white-space:nowrap}
 .mk.on{background:var(--accent-soft);border-color:transparent;color:var(--accent)}
@@ -175,7 +187,7 @@ a{color:var(--accent)}
     <button class="chip" id="fQuitar" hidden>Quitar fechas</button>
   </div>
   <div class="chips" id="zonas" role="group" aria-label="Zona"></div>
-  <div class="chips" id="etapas" role="group" aria-label="Etapa"></div>
+  <details class="estsel" id="estSel"><summary id="estSum">Todos los estados</summary><div class="panel" id="estPanel"></div></details>
   <select class="sel" id="tipo" aria-label="Tipo de PT"><option value="">Todos los tipos</option></select>
   <select class="sel" id="prog" aria-label="Programador"><option value="">Todos los programadores</option></select>
   <button class="chip" id="soloFp" aria-pressed="false">Solo fuera de plazo</button>
@@ -195,6 +207,7 @@ a{color:var(--accent)}
     <button role="tab" data-t="gen" aria-selected="true">General</button>
     <button role="tab" data-t="cond" aria-selected="false">Condiciones y bloqueos</button>
     <button role="tab" data-t="adj" aria-selected="false">Archivos adjuntos</button>
+    <button role="tab" data-t="apr" aria-selected="false">Registro de aprobaciones</button>
   </div>
   <div class="dbody" id="dBody"></div>
 </aside>
@@ -204,7 +217,7 @@ const META = /*META*/;
 const RAW = /*DATA*/;
 (function(){
 const BASE_URL = "https://stx.saesa.cl:8091/backend/sts/";
-const ET = {bandeja:"Bandeja de programación", prep:"En preparación", rev:"En revisión", apr:"Aprobado", hecha:"Ejecutado", susp:"Suspendido", anul:"Anulado"};
+const ET = {bandeja:"En programación de trabajo", prep:"Nueva", rev:"Revisión y Autorización", apr:"En Análisis", hecha:"Hecha", susp:"Otros estados", anul:"Cancelada o rechazada"};
 const etapa = s => /^Revisi/.test(s) ? "rev" : /^En An/.test(s) ? "apr" : /^Hecha/.test(s) ? "hecha" : /^(Cancelada|Rechazada)/.test(s) ? "anul" : /^En programaci/.test(s) ? "bandeja" : /^Nueva/.test(s) ? "prep" : "susp";
 const SIG = {"WILSON PINO":"wpm","RODOLFO PRIETO":"rpp","CARLA RUIZ":"cro","JUAN MIRANDA":"jma","ALEXIS AEDO":"aas","NICOLAS LORENZEN":"nll","JORGE CANETE":"jcm","IGNACIO LIGUEROS":"ilb"};
 const N = s => String(s || "").toUpperCase().normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/\s+/g, " ").trim();
@@ -216,7 +229,7 @@ const fmt = iso => { const d = new Date(iso); const p = new Intl.DateTimeFormat(
 const data = RAW.map(r => { const a = fmt(r.ini), b = fmt(r.fin || r.ini); return Object.assign(r, {a, b, e: etapa(r.estado), tipoC: tipoC(r.tipo), zg: zonaG(r.zona || ""), se: subest(r.ref), sig: sigla(r.prog), hay: (r.pt + " " + r.ref + " " + r.desc + " " + r.cond.map(c => c[2]).join(" ")).toLowerCase()}); });
 const TODAY = META.hoy;
 const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
-const pill = x => `<span class="pill e-${x.e}"><i></i>${ET[x.e]}</span>`;
+const pill = x => `<span class="pill e-${x.e}"><i></i>${esc(x.estado)}</span>`;
 const dmy = s => s.slice(8, 10) + "/" + s.slice(5, 7) + "/" + s.slice(0, 4);
 const fueraRango = data.filter(x => x.a.date < META.desde || x.a.date > META.hasta).length;
 document.getElementById("syncTxt").textContent = `Actualizado desde Centrality el ${META.leido} · ${data.length - fueraRango} PT con inicio del ${dmy(META.desde)} al ${dmy(META.hasta)}` + (fueraRango ? ` + ${fueraRango} en bandeja con otra fecha` : "");
@@ -224,16 +237,16 @@ const CHG = new Map((META.cambios || []).map(c => [c.pt, c]));
 
 const ALERTS = [
   {id:"cambio", cls:"warn", t:"Cambió en la última actualización", f:x => CHG.has(x.pt)},
-  {id:"bandeja", cls:"warn", t:"En bandeja de programación (sin asignar)", f:x => x.e === "bandeja"},
-  {id:"bandpas", cls:"crit", t:"En bandeja con fecha ya pasada", f:x => x.e === "bandeja" && x.a.date < TODAY},
+  {id:"bandeja", cls:"warn", t:"En programación de trabajo - bandeja de entrada", f:x => /bandeja de entrada/.test(x.estado) && x.e === "bandeja"},
+  {id:"bandpas", cls:"crit", t:"En bandeja de entrada con fecha ya pasada", f:x => /bandeja de entrada/.test(x.estado) && x.e === "bandeja" && x.a.date < TODAY},
   {id:"revpas", cls:"crit", t:"En revisión con fecha ya pasada", f:x => x.e === "rev" && x.a.date < TODAY},
   {id:"aprpas", cls:"crit", t:"Aprobado sin cerrar y fecha pasada", f:x => x.e === "apr" && x.b.date < TODAY},
   {id:"desccond", cls:"warn", t:"Desconexión sin condiciones de bloqueo", f:x => /^Desconexi/.test(x.tipoC) && !x.cond.length && !["anul"].includes(x.e)},
   {id:"fp", cls:"warn", t:"Fuera de plazo", f:x => x.fp},
   {id:"prog", cls:"", t:"Sin programador", f:x => !x.sig && !["anul"].includes(x.e)}
 ];
-const S = {z:new Set(), e:new Set(), tipo:"", prog:"", fp:false, adj:false, al:"", q:"", view:"tabla", d1:"", d2:"", closed:new Set(), shown:{}};
-const filtered = () => { const q = S.q.toLowerCase(); const al = ALERTS.find(a => a.id === S.al); return data.filter(x => (!S.z.size || S.z.has(x.zg)) && (!S.e.size || S.e.has(x.e)) && (!S.tipo || x.tipoC === S.tipo) && (!S.prog || x.sig === S.prog) && (!S.fp || x.fp) && (!S.adj || x.adj.length) && (!al || al.f(x)) && (!q || x.hay.includes(q)) && (!S.d1 || x.a.date >= S.d1) && (!S.d2 || x.a.date <= S.d2)); };
+const S = {z:new Set(), est:new Set(), tipo:"", prog:"", fp:false, adj:false, al:"", q:"", view:"tabla", d1:"", d2:"", closed:new Set(), shown:{}};
+const filtered = () => { const q = S.q.toLowerCase(); const al = ALERTS.find(a => a.id === S.al); return data.filter(x => (!S.z.size || S.z.has(x.zg)) && (!S.est.size || S.est.has(x.estado)) && (!S.tipo || x.tipoC === S.tipo) && (!S.prog || x.sig === S.prog) && (!S.fp || x.fp) && (!S.adj || x.adj.length) && (!al || al.f(x)) && (!q || x.hay.includes(q)) && (!S.d1 || x.a.date >= S.d1) && (!S.d2 || x.a.date <= S.d2)); };
 // "Hoy" según el reloj de quien mira la página (hora de Chile), no la fecha de la última lectura.
 const hoyCL = (dias = 0) => new Intl.DateTimeFormat("en-CA", {timeZone:"America/Santiago"}).format(new Date(Date.now() + dias * 864e5));
 const rango = r => r === "hoy" ? [hoyCL(), hoyCL()] : r === "manana" ? [hoyCL(1), hoyCL(1)] : [hoyCL(), hoyCL(6)];
@@ -248,7 +261,7 @@ function rowHtml(x){
     <div class="c-se">${esc(x.se)}<span class="sub">${esc(x.ref)}</span></div>
     <div class="c-desc"><span class="desc">${esc(x.desc)}</span></div>
     <div class="c-prog">${x.sig ? `<b>${esc(x.sig)}</b>` : '<span class="muted">—</span>'}</div>
-    <div class="c-est">${pill(x)}<span class="sub">${esc(x.estado)}</span></div>
+    <div class="c-est">${pill(x)}</div>
     <div class="c-marks marks">${marks}</div></div>`;
 }
 const MESES = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
@@ -295,19 +308,28 @@ function render(){
   }).join("");
 }
 document.getElementById("zonas").innerHTML = ["Zona Norte","Metropolitana","Zona Sur","Sin área"].map(z => `<button class="chip" data-z="${z}" aria-pressed="false">${z}</button>`).join("");
-document.getElementById("etapas").innerHTML = Object.keys(ET).map(k => `<button class="chip" data-e="${k}" aria-pressed="false"><i style="background:var(--e-${k})"></i>${ET[k]}</button>`).join("");
+// Filtro de estado: los estados exactos de Centrality, agrupados por color.
+const EST = {}; data.forEach(x => { EST[x.estado] = EST[x.estado] || {n: 0, e: x.e}; EST[x.estado].n++; });
+document.getElementById("estPanel").innerHTML = Object.keys(ET).filter(k => Object.values(EST).some(v => v.e === k)).map(k =>
+  `<div class="grp"><i style="background:var(--e-${k})"></i>${ET[k]}</div>` +
+  Object.keys(EST).filter(s => EST[s].e === k).sort((a, b) => EST[b].n - EST[a].n).map(s => `<label><input type="checkbox" data-est="${esc(s)}"><span>${esc(s)}</span><em>${EST[s].n}</em></label>`).join("")
+).join("") + `<div class="acc"><button class="chip" id="estTodos">Quitar selección</button><button class="chip" id="estCerrar">Cerrar</button></div>`;
+const estSum = () => { const n = S.est.size; document.getElementById("estSum").textContent = !n ? "Todos los estados" : n === 1 ? [...S.est][0] : `${n} estados`; document.getElementById("estSel").classList.toggle("on", n > 0); };
+document.getElementById("estPanel").addEventListener("change", ev => { const s = ev.target.dataset.est; if (s == null) return; ev.target.checked ? S.est.add(s) : S.est.delete(s); estSum(); render(); });
+document.getElementById("estTodos").addEventListener("click", () => { S.est.clear(); document.querySelectorAll("#estPanel input").forEach(i => i.checked = false); estSum(); render(); });
+document.getElementById("estCerrar").addEventListener("click", () => { document.getElementById("estSel").open = false; });
+document.addEventListener("click", ev => { const d = document.getElementById("estSel"); if (d.open && !d.contains(ev.target)) d.open = false; });
 const addOpts = (id, vals) => vals.forEach(v => { const o = document.createElement("option"); o.value = v; o.textContent = v; document.getElementById(id).appendChild(o); });
 addOpts("tipo", [...new Set(data.map(x => x.tipoC))].sort());
 addOpts("prog", [...new Set(data.map(x => x.sig).filter(Boolean))].sort());
 document.addEventListener("click", ev => {
   const t = ev.target;
-  const z = t.closest("[data-z]"), e = t.closest("[data-e]"), al = t.closest("[data-al]"), mo = t.closest("[data-more]"), dy = t.closest("[data-day]"), pt = t.closest("[data-pt]"), dl = t.closest("[data-dia]");
+  const z = t.closest("[data-z]"), al = t.closest("[data-al]"), mo = t.closest("[data-more]"), dy = t.closest("[data-day]"), pt = t.closest("[data-pt]"), dl = t.closest("[data-dia]");
   const rg = t.closest("[data-rango]");
   if (dl){ S.d1 = S.d2 = dl.dataset.dia; setView("tabla"); window.scrollTo({top: 0}); }
   else if (rg){ [S.d1, S.d2] = rango(rg.dataset.rango); render(); }
   else if (t.closest("#fQuitar")){ S.d1 = S.d2 = ""; render(); }
   else if (z){ const v = z.dataset.z; S.z.has(v) ? S.z.delete(v) : S.z.add(v); z.setAttribute("aria-pressed", S.z.has(v)); render(); }
-  else if (e){ const v = e.dataset.e; S.e.has(v) ? S.e.delete(v) : S.e.add(v); e.setAttribute("aria-pressed", S.e.has(v)); render(); }
   else if (al){ S.al = S.al === al.dataset.al ? "" : al.dataset.al; render(); }
   else if (mo){ S.shown[mo.dataset.more] = (S.shown[mo.dataset.more] || 80) + 80; render(); }
   else if (dy){ const v = dy.dataset.day; S.closed.has(v) ? S.closed.delete(v) : S.closed.add(v); render(); }
@@ -334,6 +356,7 @@ function drawD(){
   const ch = CHG.get(x.pt);
   if (tab === "gen") h = (ch ? `<p class="src" style="border:1px solid var(--line);border-left:3px solid var(--warn);border-radius:6px;padding:8px 10px;color:var(--ink)"><b>Última actualización:</b> ${esc(ch.txt)}</p>` : "") + `<dl class="kv"><dt>Inicio</dt><dd>${x.a.full}</dd><dt>Término</dt><dd>${x.b.full}</dd><dt>Tipo de PT</dt><dd>${esc(x.tipo)}</dd><dt>Estado Centrality</dt><dd>${esc(x.estado)}</dd><dt>Subestación</dt><dd>${esc(x.se)}</dd><dt>Elemento de referencia</dt><dd>${esc(x.ref)}</dd><dt>Zona · Área</dt><dd>${esc(x.zona)} · ${esc(x.area)}</dd><dt>Descripción del trabajo</dt><dd>${esc(x.desc)}</dd><dt>Programador</dt><dd>${esc(x.prog || "Sin asignar")}</dd><dt>Solicitante</dt><dd>${esc(x.solicitante)}</dd><dt>Creador</dt><dd>${esc(x.creador)}</dd><dt>Caso</dt><dd>${esc(x.caso || "—")}</dd><dt>Fuera de plazo</dt><dd>${x.fp ? '<b style="color:var(--crit)">Sí</b>' : "No"}</dd></dl>`;
   else if (tab === "cond") h = x.cond.length ? `<p class="src">Pestaña "Condiciones y bloqueos Jefe Faena" de Centrality</p><div class="tw"><table><thead><tr><th></th><th>Zona intervención</th><th>Elementos de referencia</th><th>Condición</th><th>Descripción</th><th>Oblig.</th></tr></thead><tbody>${x.cond.map(c => `<tr><td>${esc(c[0])}</td><td>${esc(c[1])}</td><td>${esc(c[2])}</td><td>${esc(c[3])}</td><td>${esc(c[4])}</td><td>${c[5] ? "Sí" : "No"}</td></tr>`).join("")}</tbody></table></div>` : `<p class="muted">Este PT no tiene condiciones ni bloqueos registrados en Centrality.</p>`;
+  else if (tab === "apr") h = x.apr ? (x.apr.length ? `<p class="src">Pestaña "Registro del circuito de aprobaciones" de Centrality, del más reciente al más antiguo</p><div class="tw"><table><thead><tr><th>Fecha</th><th>Paso</th><th>Usuario</th><th>Acción</th><th>Comentarios</th></tr></thead><tbody>${x.apr.map(a => `<tr><td style="white-space:nowrap">${a[0] ? fmt(a[0]).full : ""}</td><td>${esc(a[1])}</td><td>${esc(a[2])}</td><td>${esc(a[3])}</td><td>${esc(a[4])}</td></tr>`).join("")}</tbody></table></div>` : `<p class="muted">Este PT no tiene registros en el circuito de aprobaciones.</p>`) : `<p class="muted">El registro de aprobaciones de este PT se cargará en la próxima actualización.</p>`;
   else h = x.adj.length ? `<p class="src">Los enlaces abren el archivo en Centrality; necesitas tener sesión iniciada allí.</p><div class="tw"><table><thead><tr><th>Nombre</th><th>Tamaño</th><th>Tipo</th><th>Creado</th><th>Creador</th></tr></thead><tbody>${x.adj.map(a => `<tr><td><a href="${BASE_URL}fh_get_file.php?id=${a[0]}&download=1" target="_blank" rel="noopener">${esc(a[1])}</a></td><td>${esc(a[2])}</td><td>${esc(a[3])}</td><td>${fmt(a[5]).full}</td><td>${esc(a[6])}</td></tr>`).join("")}</tbody></table></div>` : `<p class="muted">Este PT no tiene archivos adjuntos en Centrality.</p>`;
   document.getElementById("dBody").innerHTML = h;
 }
