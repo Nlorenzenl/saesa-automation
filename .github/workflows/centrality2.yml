@@ -79,7 +79,7 @@ jobs:
           EMAIL_DEST: ${{ secrets.EMAIL_DEST }}
           EMAIL_CC: ${{ secrets.CENTRALITY2_EMAIL_CC }}
           PAGINA_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/
-          DESDE: "2026-09-01"
+          DESDE: "2026-06-01"
           HASTA: "2026-12-31"
           FULL_REFRESH: ${{ inputs.full_refresh || 'false' }}
           SIN_CORREO: ${{ inputs.sin_correo || 'false' }}
