@@ -401,7 +401,11 @@ def main():
                 f.write(json.dumps(dict(cb, cuando=leido), ensure_ascii=False) + "\n")
     html = generar_html(nuevo, cambios, leido)
     log(f"Agenda generada: {html} ({html.stat().st_size // 1024} KB). Cambios: {len(cambios)}{' (primera carga)' if primera else ''}")
-    enviar_correo(cambios, nuevo, leido, html, primera)
+    # Con actualización cada hora, el correo solo sale cuando hay cambios.
+    if primera or cambios:
+        enviar_correo(cambios, nuevo, leido, html, primera)
+    else:
+        log("Sin cambios: no se envía correo")
     log(f"Listo en {int(time.time() - t0)} s")
 
 

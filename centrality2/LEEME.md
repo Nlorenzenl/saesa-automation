@@ -1,6 +1,6 @@
 # Centrality 2.0
 
-Agenda de PT que se actualiza sola desde Centrality cada 3 horas, se publica en GitHub Pages protegida con contraseña y envía un correo con los cambios.
+Agenda de PT que se actualiza sola desde Centrality cada 1 hora, se publica en GitHub Pages protegida con contraseña y envía un correo cuando hay cambios.
 
 ## Qué hay en esta carpeta
 
@@ -9,7 +9,7 @@ Agenda de PT que se actualiza sola desde Centrality cada 3 horas, se publica en 
 | `sync_centrality.py` | Lee Centrality, compara con la lectura anterior, genera la agenda y envía el correo |
 | `plantilla.html` | Diseño de la agenda (tabla, calendario, alertas, ficha con condiciones y adjuntos) |
 | `encriptar_pagina.py` | Cifra la agenda con la contraseña antes de publicarla |
-| `../.github/workflows/centrality2.yml` | Ejecuta todo cada 3 horas en GitHub Actions y publica la página |
+| `../.github/workflows/centrality2.yml` | Ejecuta todo cada 1 hora en GitHub Actions y publica la página |
 
 ## Por qué la página va cifrada
 
@@ -57,7 +57,7 @@ Luego **Commit changes**.
 - la página queda en `https://TU-USUARIO.github.io/NOMBRE-DEL-REPO/`
 - llega el correo "primera carga" con el botón **Abrir la agenda en la web**
 
-Desde ahí corre sola cada 3 horas.
+Desde ahí corre sola cada 1 hora. Si SAESA Diario está corriendo en ese momento (usa el mismo usuario de Centrality), esa hora se salta. El correo solo se envía cuando hay cambios.
 
 ## Uso de la página
 
