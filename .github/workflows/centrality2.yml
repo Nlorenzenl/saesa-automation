@@ -1,10 +1,9 @@
 name: Centrality 2.0
 on:
   schedule:
-    # Cada 3 horas a las 01, 04, 07, 10, 13, 16, 19 y 22 UTC
-    # (Chile en verano: 22, 01, 04, 07, 10, 13, 16 y 19 h).
-    # Evita chocar con "SAESA Diario" (20:00 UTC, lunes a viernes), que usa el mismo usuario de Centrality.
-    - cron: "0 1-22/3 * * *"
+    # Cada 1 hora. Si "SAESA Diario" (que usa el mismo usuario de Centrality) está
+    # corriendo, el trabajo "revisar" se salta esa hora.
+    - cron: "0 * * * *"
   workflow_dispatch:
     inputs:
       full_refresh:
@@ -21,6 +20,7 @@ on:
         default: false
 
 permissions:
+  actions: read
   contents: write
   pages: write
   id-token: write
@@ -30,7 +30,33 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  revisar:
+    runs-on: ubuntu-latest
+    outputs:
+      omitir: ${{ steps.saesa.outputs.omitir }}
+    steps:
+      - name: Revisar si SAESA Diario está corriendo
+        id: saesa
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Solo las ejecuciones automáticas se saltan; las manuales corren siempre.
+          if [ "${{ github.event_name }}" != "schedule" ]; then echo "omitir=false" >> "$GITHUB_OUTPUT"; exit 0; fi
+          n=0
+          for estado in in_progress queued waiting pending requested; do
+            c=$(gh run list -R "${{ github.repository }}" --workflow saesa_diario.yml --status "$estado" --json databaseId --jq length || echo 0)
+            n=$((n + c))
+          done
+          if [ "$n" -gt 0 ]; then
+            echo "omitir=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::SAESA Diario está corriendo; Centrality 2.0 se salta esta hora."
+          else
+            echo "omitir=false" >> "$GITHUB_OUTPUT"
+          fi
+
   sincronizar:
+    needs: revisar
+    if: ${{ needs.revisar.outputs.omitir != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 300
     env:
