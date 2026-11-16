@@ -86,6 +86,22 @@ main .inner{display:grid;gap:14px;padding-block:4px 60px}
 .pill i{width:7px;height:7px;border-radius:50%;background:var(--e);flex:none}
 .c-est .pill,#dPills .pill{white-space:normal;align-items:baseline;line-height:1.3;padding:2px 8px}
 .estsel{position:relative}
+/* Aviso flotante */
+.toast{position:fixed;left:50%;bottom:20px;transform:translate(-50%,20px);opacity:0;pointer-events:none;background:var(--ink);color:var(--surface);padding:10px 16px;border-radius:8px;font-size:13px;z-index:60;transition:opacity .2s,transform .2s;max-width:calc(100vw - 32px)}
+.toast.on{opacity:1;transform:translate(-50%,0)}
+/* Factibilidad */
+.mk.fx{cursor:pointer;background:var(--surface);font:inherit;font-size:11px;font-weight:600}
+.mk.fx.on{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+#dFact[aria-pressed=true]{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+.ftab{width:100%;border-collapse:collapse;font-size:13px}
+.ftab th,.ftab td{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left;vertical-align:middle}
+.ftab tr.fdia td{background:var(--surface-2);font:700 13px var(--f-display);border-top:2px solid var(--line)}
+.ftab td .pill{margin-top:3px}
+.ftab .tag{display:block;font-size:11px;font-weight:600;color:var(--warn);margin-top:2px}
+input.fin{width:100%;min-width:110px;border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:4px;padding:4px 6px;font:13px var(--f-body)}
+.sc-link{appearance:none;border:0;background:none;padding:0;color:var(--accent);font:600 13px var(--f-body);cursor:pointer;font-variant-numeric:tabular-nums;display:block}
+.btn:disabled{opacity:.5;cursor:default}
+select.sel.rng{max-width:240px}
 /* Seguimiento mensual */
 .segbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin-bottom:12px}
 .segbar h2{margin:0;font:700 20px var(--f-display);text-transform:capitalize;min-width:170px;text-align:center}
@@ -219,7 +235,7 @@ a{color:var(--accent)}
 </div></header>
 
 <div class="toolbar g"><div class="inner">
-  <div class="seg" role="group" aria-label="Vista"><button id="vTabla" aria-pressed="true">Tabla</button><button id="vCal" aria-pressed="false">Calendario</button><button id="vSeg" aria-pressed="false">Seguimiento</button></div>
+  <div class="seg" role="group" aria-label="Vista"><button id="vTabla" aria-pressed="true">Tabla</button><button id="vCal" aria-pressed="false">Calendario</button><button id="vSeg" aria-pressed="false">Seguimiento</button><button id="vFact" aria-pressed="false">Factibilidad</button></div>
   <div class="fechas" role="group" aria-label="Fechas">
     <label title="Fecha de inicio del PT">Inicio desde <input type="date" class="fecha" id="fDesde"></label>
     <label>Hasta <input type="date" class="fecha" id="fHasta"></label>
@@ -242,7 +258,7 @@ a{color:var(--accent)}
 
 <aside class="drawer" id="drawer" hidden aria-labelledby="dTitle">
   <header>
-    <div class="r1"><div style="display:grid;gap:4px"><span class="muted" style="font-size:12px;text-transform:uppercase;letter-spacing:.06em">Permiso de trabajo</span><h3 id="dTitle"></h3></div><button class="btn" id="dClose">Cerrar</button></div>
+    <div class="r1"><div style="display:grid;gap:4px"><span class="muted" style="font-size:12px;text-transform:uppercase;letter-spacing:.06em">Permiso de trabajo</span><h3 id="dTitle"></h3></div><div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end"><button class="btn" id="dFact" aria-pressed="false">Agregar a Factibilidad</button><button class="btn" id="dClose">Cerrar</button></div></div>
     <div id="dPills" style="display:flex;flex-wrap:wrap;gap:6px"></div>
   </header>
   <div class="dtabs" role="tablist" aria-label="Secciones de la ficha">
@@ -287,7 +303,7 @@ const ALERTS = [
   {id:"fp", cls:"warn", t:"Fuera de plazo", f:x => x.fp},
   {id:"prog", cls:"", t:"Sin programador", f:x => !x.sig && !["anul"].includes(x.e)}
 ];
-const S = {z:new Set(), est:new Set(), tipo:"", prog:"", fp:false, adj:false, al:"", q:"", view:"tabla", d1:"", d2:"", mes:"", segTodos:false, segOpen:new Set(), closed:new Set(), shown:{}};
+const S = {z:new Set(), est:new Set(), tipo:"", prog:"", fp:false, adj:false, al:"", q:"", view:"tabla", d1:"", d2:"", mes:"", segTodos:false, segOpen:new Set(), segRango:"", factPasados:false, closed:new Set(), shown:{}};
 const filtered = (sinFechas) => { const q = S.q.toLowerCase(); const al = ALERTS.find(a => a.id === S.al); return data.filter(x => (!S.z.size || S.z.has(x.zg)) && (!S.est.size || S.est.has(x.estado)) && (!S.tipo || x.tipoC === S.tipo) && (!S.prog || x.sig === S.prog) && (!S.fp || x.fp) && (!S.adj || x.adj.length) && (!al || al.f(x)) && (!q || x.hay.includes(q)) && (sinFechas || ((!S.d1 || x.a.date >= S.d1) && (!S.d2 || x.a.date <= S.d2)))); };
 // "Hoy" según el reloj de quien mira la página (hora de Chile), no la fecha de la última lectura.
 const hoyCL = (dias = 0) => new Intl.DateTimeFormat("en-CA", {timeZone:"America/Santiago"}).format(new Date(Date.now() + dias * 864e5));
@@ -304,7 +320,7 @@ function rowHtml(x){
     <div class="c-desc"><span class="desc">${esc(x.desc)}</span></div>
     <div class="c-prog">${x.sig ? `<b>${esc(x.sig)}</b>` : '<span class="muted">—</span>'}</div>
     <div class="c-est">${pill(x)}</div>
-    <div class="c-marks marks">${marks}</div></div>`;
+    <div class="c-marks marks">${marks}<button class="mk fx${FACT[x.pt] ? " on" : ""}" data-fact="${x.pt}" title="${FACT[x.pt] ? "Quitar de" : "Agregar a"} la lista de estudios de factibilidad">${FACT[x.pt] ? "✓ Factibilidad" : "+ Factibilidad"}</button></div></div>`;
 }
 const MESES = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
 const ORDEN = {bandeja:0, rev:0, prep:1, apr:2, susp:3, hecha:4, anul:5};
@@ -420,6 +436,9 @@ function segHtml(list){
   return `<div class="segbar"><button class="btn noprint" data-segmes="-1" aria-label="Mes anterior">‹</button><h2>${MESES[m - 1]} ${y}</h2><button class="btn noprint" data-segmes="1" aria-label="Mes siguiente">›</button>
     <label class="noprint"><input type="checkbox" id="segTodos"${S.segTodos ? " checked" : ""}> Mostrar todos los PT de cada día</label>
     <button class="btn noprint" id="segPrint">Imprimir o guardar PDF</button>
+    <select class="sel rng noprint" id="segRango" aria-label="Qué copiar"><option value="">Mes completo</option>${semanasDelMes(ym).map(w => `<option value="${w[0]}|${w[1]}"${S.segRango === w[0] + "|" + w[1] ? " selected" : ""}>Semana del ${ddmm(w[0])} al ${ddmm(w[1])}</option>`).join("")}</select>
+    <button class="btn noprint" id="segCopiar">Copiar para correo</button>
+    <button class="btn noprint" id="segDescargar">Descargar</button>
     <span class="note">${nota}${hayFiltro ? " Con filtros activos." : ""}</span></div>${resumen}
     <div class="sgrid">${DOWS.map(d => `<div class="sdow">${d}</div>`).join("")}${cells.join("")}</div>`;
 }
@@ -427,13 +446,202 @@ document.addEventListener("click", ev => {
   const t = ev.target, mes = t.closest("[data-segmes]"), mas = t.closest("[data-segmas]"), menos = t.closest("[data-segmenos]");
   if (mes){
     const [y, m] = S.mes.split("-").map(Number), d = new Date(y, m - 1 + Number(mes.dataset.segmes), 1);
-    S.mes = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; S.segOpen.clear(); render();
+    S.mes = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; S.segOpen.clear(); S.segRango = ""; render();
   }
   else if (mas){ S.segOpen.add(mas.dataset.segmas); render(); }
   else if (menos){ S.segOpen.delete(menos.dataset.segmenos); render(); }
   else if (t.closest("#segPrint")){ const antes = S.segTodos; S.segTodos = true; render(); window.print(); S.segTodos = antes; render(); }
 });
 document.addEventListener("change", ev => { if (ev.target.id === "segTodos"){ S.segTodos = ev.target.checked; render(); } });
+
+// ---------- Copiar para correo ----------
+// Outlook no entiende CSS moderno: el HTML para correo va en tablas con estilos en línea.
+const DIAS_CORTO = ["Do","Lu","Ma","Mi","Ju","Vi","Sa"];
+const DIAS_LARGO = ["Domingo","Lunes","Martes","Miércoles","Jueves","Viernes","Sábado"];
+const dmyG = d => d.slice(8, 10) + "-" + d.slice(5, 7) + "-" + d.slice(0, 4);
+const diaSemana = d => new Date(d + "T12:00:00").getDay();
+function aviso(txt){
+  let el = document.getElementById("toast");
+  if (!el){ el = document.createElement("div"); el.id = "toast"; el.className = "toast"; el.setAttribute("role", "status"); document.body.appendChild(el); }
+  el.textContent = txt; el.classList.add("on"); clearTimeout(aviso.t); aviso.t = setTimeout(() => el.classList.remove("on"), 4500);
+}
+async function copiarHtml(html, texto){
+  try {
+    await navigator.clipboard.write([new ClipboardItem({"text/html": new Blob([html], {type: "text/html"}), "text/plain": new Blob([texto], {type: "text/plain"})})]);
+    return true;
+  } catch (e) {
+    // Respaldo para navegadores sin ClipboardItem: copiar una selección.
+    const d = document.createElement("div"); d.contentEditable = "true"; d.innerHTML = html;
+    d.style.cssText = "position:fixed;left:-99999px;top:0;background:#fff;color:#000";
+    document.body.appendChild(d);
+    const r = document.createRange(); r.selectNodeContents(d); const s = getSelection(); s.removeAllRanges(); s.addRange(r);
+    let ok = false; try { ok = document.execCommand("copy"); } catch (e2) {}
+    s.removeAllRanges(); d.remove(); return ok;
+  }
+}
+function descargarHtml(html, nombre, titulo){
+  const doc = `<!doctype html><html lang="es"><head><meta charset="utf-8"><title>${esc(titulo)}</title></head><body style="margin:16px;background:#fff">${html}</body></html>`;
+  const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([doc], {type: "text/html"})); a.download = nombre;
+  document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+}
+const textoPlano = html => { const d = document.createElement("div"); d.innerHTML = html.replace(/<br\s*\/?>/g, "\n").replace(/<\/(tr|p|div)>/g, "\n"); return d.textContent.replace(/\n{3,}/g, "\n\n").trim(); };
+
+// Seguimiento → calendario semanal como el correo de mantenimiento
+function semanasDelMes(ym){
+  const [y, m] = ym.split("-").map(Number), last = new Date(y, m, 0).getDate(), out = [];
+  for (let d = 1; d <= last; d++){
+    const dt = `${ym}-${String(d).padStart(2, "0")}`;
+    if (d === 1 || diaSemana(dt) === 1) out.push([dt, dt]);
+    out[out.length - 1][1] = dt;
+  }
+  return out;
+}
+function seguimientoCorreo(){
+  const ym = S.mes, rango = S.segRango ? S.segRango.split("|") : [ym + "-01", semanasDelMes(ym).slice(-1)[0][1]];
+  const plan = (META.planes || {})[ym], pp = plan ? plan.pts : {};
+  const lista = filtered(true).filter(x => x.a.date >= rango[0] && x.a.date <= rango[1]).sort((p, q) => p.a.date.localeCompare(q.a.date) || p.a.hm.localeCompare(q.a.hm));
+  const porDia = {}; lista.forEach(x => (porDia[x.a.date] = porDia[x.a.date] || []).push(x));
+  const td = "border:1px solid #808080;padding:4px 5px;vertical-align:top;font:11px Calibri,Arial,sans-serif;color:#000;width:14.2%";
+  const th = "border:1px solid #808080;padding:3px;background:#ffff00;font:bold 11px Calibri,Arial,sans-serif;color:#000;text-align:center";
+  const entrada = x => {
+    let cat = segE(x.estado), extra = "";
+    if (plan && pp[x.pt]){ const pd = fmt(pp[x.pt][0]).date; if (pd !== x.a.date){ extra = `<br>Reprogramado desde ${ddmm(pd)}`; if (cat !== "ejec" && cat !== "canc") cat = "reprog"; } }
+    else if (plan) extra = "<br>Agregado durante el mes";
+    return `-S/E ${esc(x.se || x.ref || "—")}<br>${x.a.hm} - ${x.b.hm}${x.b.date !== x.a.date ? " (" + x.b.dm + ")" : ""}<br>${esc(x.desc)}<br>PT: ${x.pt}<br>${esc(x.area || "")}<br><b>ESTADO: ${SEG[cat]}</b>${extra}`;
+  };
+  // Semanas de lunes a domingo; los días fuera del rango quedan vacíos
+  let html = `<p style="font:bold 14px Calibri,Arial,sans-serif;margin:0 0 6px">Seguimiento de PT · ${dmyG(rango[0]).replace(/-/g, "/")} al ${dmyG(rango[1]).replace(/-/g, "/")}</p><table cellspacing="0" cellpadding="0" style="border-collapse:collapse;width:100%;max-width:1100px">`;
+  let d = new Date(rango[0] + "T12:00:00"); d.setDate(d.getDate() - (d.getDay() + 6) % 7);
+  const fin = new Date(rango[1] + "T12:00:00");
+  while (d <= fin){
+    const dias = [];
+    for (let i = 0; i < 7; i++){ const x = new Date(d); x.setDate(d.getDate() + i); dias.push(x.toISOString().slice(0, 10)); }
+    html += "<tr>" + dias.map((dt, i) => `<td style="${th}">${DOWS[i].toUpperCase()}<br>${dmyG(dt)}</td>`).join("") + "</tr>";
+    html += "<tr>" + dias.map(dt => `<td style="${td}">${dt >= rango[0] && dt <= rango[1] ? (porDia[dt] || []).map(entrada).join("<br><br>") : ""}</td>`).join("") + "</tr>";
+    d.setDate(d.getDate() + 7);
+  }
+  html += "</table>";
+  return {html, n: lista.length, nombre: `seguimiento_${rango[0]}_${rango[1]}.html`};
+}
+
+// ---------- Factibilidad ----------
+// Lista personal de PT que requieren estudio de factibilidad. Se guarda en este navegador.
+const FKEY = "c2-factibilidad";
+let FACT = {};
+try { FACT = JSON.parse(localStorage.getItem(FKEY) || "{}") || {}; } catch (e) { FACT = {}; }
+const guardarFact = () => { try { localStorage.setItem(FKEY, JSON.stringify(FACT)); } catch (e) { aviso("No se pudo guardar en este navegador. Usa «Exportar lista» para respaldar."); } };
+const tipoCorto = t => (t || "").replace("Desconexión", "Desc.").replace("Intervención", "Interv.");
+const zonaCorta = z => (z || "").replace(/^Area Zonal /i, "").replace(/^Área Zonal /i, "");
+function toggleFact(pt){
+  const x = porPTg().get(pt);
+  if (FACT[pt]) { delete FACT[pt]; aviso(`PT ${pt} quitado de Factibilidad`); }
+  else { FACT[pt] = {ini0: x ? x.ini : "", comp: "", desc: "", obs: "", cuando: new Date().toISOString()}; aviso(`PT ${pt} agregado a Factibilidad`); }
+  guardarFact(); actualizarBotonFact(); render();
+  if (cur && cur.pt === pt) marcarFactDrawer();
+}
+let _porPT = null; const porPTg = () => _porPT || (_porPT = new Map(data.map(x => [x.pt, x])));
+function actualizarBotonFact(){ const n = Object.keys(FACT).length; document.getElementById("vFact").textContent = n ? `Factibilidad (${n})` : "Factibilidad"; }
+function marcarFactDrawer(){ const b = document.getElementById("dFact"); if (!b || !cur) return; const on = !!FACT[cur.pt]; b.textContent = on ? "Quitar de Factibilidad" : "Agregar a Factibilidad"; b.setAttribute("aria-pressed", on); }
+function factFilas(incluirPasados){
+  const hoy = hoyCL();
+  return Object.keys(FACT).map(pt => ({pt, f: FACT[pt], x: porPTg().get(pt)}))
+    .filter(r => incluirPasados || !r.x || r.x.b.date >= hoy)
+    .sort((p, q) => ((p.x && p.x.ini) || "").localeCompare((q.x && q.x.ini) || "") || p.pt.localeCompare(q.pt));
+}
+const horaFin = x => x.b.date !== x.a.date ? `${x.b.hm} (${DIAS_CORTO[diaSemana(x.b.date)]} ${x.b.dm})` : x.b.hm;
+function factHtml(){
+  const filas = factFilas(S.factPasados);
+  const total = Object.keys(FACT).length;
+  const sugeridos = new Set(); filas.forEach(r => r.x && r.x.cond.forEach(c => c[2] && String(c[2]).split(/[,;]\s*/).forEach(v => v && sugeridos.add(v.trim()))));
+  let h = `<div class="segbar"><h2 style="text-align:left;min-width:0;text-transform:none">Trabajos que requieren estudio de factibilidad</h2>
+    <button class="btn" id="factCopiar"${filas.length ? "" : " disabled"}>Copiar para correo</button>
+    <button class="btn" id="factDescargar"${filas.length ? "" : " disabled"}>Descargar</button>
+    <label><input type="checkbox" id="factPasados"${S.factPasados ? " checked" : ""}> Incluir trabajos ya pasados</label>
+    <span style="flex:1"></span>
+    <button class="btn noprint" id="factExportar"${total ? "" : " disabled"}>Exportar lista</button>
+    <label class="btn noprint" style="cursor:pointer">Importar lista<input type="file" id="factImportar" accept=".json,application/json" hidden></label>
+    <span class="note">Agrega PT con el botón «+ Factibilidad» de la tabla o «Agregar a Factibilidad» en la ficha. Componentes, descripción y observación los escribes tú y se guardan solos en este navegador; usa «Exportar lista» para respaldarla o pasarla a otro equipo.</span></div>`;
+  if (!filas.length){
+    return h + `<div class="empty" style="background:var(--surface);border:1px solid var(--line);border-radius:8px">${total ? "Todos los PT de la lista ya pasaron. Marca «Incluir trabajos ya pasados» para verlos." : "Aún no hay PT en la lista."}</div>`;
+  }
+  h += `<datalist id="dlComp">${[...sugeridos].slice(0, 200).map(v => `<option value="${esc(v)}">`).join("")}</datalist>
+    <datalist id="dlDesc"><option value="Mantenimiento"><option value="Proyecto"><option value="Proyecto + Mantenimiento"></datalist>
+    <datalist id="dlObs"><option value="PMA"></datalist>`;
+  let dia = "";
+  h += `<div class="tw" style="background:var(--surface);border:1px solid var(--line);border-radius:8px"><table class="ftab"><thead><tr><th>Zona</th><th>Tipo</th><th>Hora inicio</th><th>Hora fin</th><th>SE o Línea</th><th>Componentes</th><th>Descripción</th><th>Observación</th><th>PT · estado</th><th></th></tr></thead><tbody>`;
+  for (const r of filas){
+    const x = r.x;
+    if (!x){
+      h += `<tr><td colspan="8" class="muted">PT ${r.pt}: ya no está en la agenda (salió del rango o de Centrality).</td><td>${r.pt}</td><td><button class="btn" data-factquitar="${r.pt}">Quitar</button></td></tr>`;
+      continue;
+    }
+    if (x.a.date !== dia){ dia = x.a.date; h += `<tr class="fdia"><td colspan="10">${DIAS_LARGO[diaSemana(dia)]} ${dmyG(dia)}</td></tr>`; }
+    const movido = r.f.ini0 && r.f.ini0 !== x.ini;
+    const alerta = segE(x.estado) === "canc" ? `<span class="tag" style="color:var(--crit)">Cancelado en Centrality</span>` : movido ? `<span class="tag">Cambió la fecha desde que lo agregaste (antes ${fmt(r.f.ini0).full})</span>` : "";
+    h += `<tr><td>${esc(zonaCorta(x.zona))}</td><td>${esc(tipoCorto(x.tipoC))}</td><td>${x.a.hm}</td><td>${horaFin(x)}</td><td>${esc(x.ref || x.se)}</td>
+      <td><input class="fin" list="dlComp" data-fpt="${r.pt}" data-fk="comp" value="${esc(r.f.comp)}" placeholder="Ej: ATR N°2"></td>
+      <td><input class="fin" list="dlDesc" data-fpt="${r.pt}" data-fk="desc" value="${esc(r.f.desc)}" placeholder="Ej: Mantenimiento"></td>
+      <td><input class="fin" list="dlObs" data-fpt="${r.pt}" data-fk="obs" value="${esc(r.f.obs)}" placeholder="Ej: PMA"></td>
+      <td><button class="sc-link" data-pt="${r.pt}">${r.pt}</button>${pill(x)}${alerta}</td>
+      <td><button class="btn" data-factquitar="${r.pt}">Quitar</button></td></tr>`;
+  }
+  return h + `</tbody></table></div>`;
+}
+function factCorreo(){
+  const filas = factFilas(S.factPasados).filter(r => r.x);
+  const c = "border:1px solid #bfbfbf;padding:3px 6px;font:11px Calibri,Arial,sans-serif;color:#000;vertical-align:middle";
+  const cab = "border:1px solid #bfbfbf;padding:3px 6px;font:bold 11px Calibri,Arial,sans-serif;color:#000;text-align:center;background:#f2f2f2";
+  const diaSt = "padding:3px 6px;font:bold 11px Calibri,Arial,sans-serif;color:#fff;background:#595959";
+  const cols = ["Zona", "Tipo", "Hora Inicio", "Hora Fin", "SE o Línea", "Componentes", "Descripción", "Observación"];
+  let html = `<table cellspacing="0" cellpadding="0" style="border-collapse:collapse;max-width:1000px">`, dia = "";
+  for (const r of filas){
+    const x = r.x;
+    if (x.a.date !== dia){
+      dia = x.a.date;
+      html += `<tr><td colspan="8" style="${diaSt}">${DIAS_LARGO[diaSemana(dia)]} ${dmyG(dia)}</td></tr><tr>${cols.map(k => `<td style="${cab}">${k}</td>`).join("")}</tr>`;
+    }
+    html += `<tr><td style="${c}">${esc(zonaCorta(x.zona))}</td><td style="${c}">${esc(tipoCorto(x.tipoC))}</td><td style="${c};text-align:center;font-weight:bold">${x.a.hm}</td><td style="${c};text-align:center;font-weight:bold">${horaFin(x)}</td><td style="${c}">${esc(x.ref || x.se)}</td><td style="${c}">${esc(r.f.comp)}</td><td style="${c}">${esc(r.f.desc)}</td><td style="${c};text-align:center">${esc(r.f.obs)}</td></tr>`;
+  }
+  html += "</table>";
+  return {html, n: filas.length};
+}
+// Botón «+ Factibilidad» en tabla y ficha: se atiende antes que el clic que abre la ficha.
+document.addEventListener("click", ev => {
+  const b = ev.target.closest("[data-fact]");
+  if (b){ ev.stopPropagation(); ev.preventDefault(); toggleFact(b.dataset.fact); return; }
+  const q = ev.target.closest("[data-factquitar]");
+  if (q){ ev.stopPropagation(); if (confirmarQuitar(q.dataset.factquitar)) toggleFact(q.dataset.factquitar); return; }
+  if (ev.target.closest("#dFact") && cur){ ev.stopPropagation(); toggleFact(cur.pt); return; }
+}, true);
+const confirmarQuitar = pt => { const f = FACT[pt]; return !(f && (f.comp || f.desc || f.obs)) || window.confirm(`¿Quitar el PT ${pt} de Factibilidad? Se pierden los datos que escribiste.`); };
+document.addEventListener("click", async ev => {
+  const t = ev.target;
+  if (t.closest("#factCopiar")){ const r = factCorreo(); aviso(await copiarHtml(r.html, textoPlano(r.html)) ? `Tabla copiada (${r.n} PT). Pégala en el cuerpo del correo con Ctrl+V.` : "No se pudo copiar. Usa «Descargar»."); }
+  else if (t.closest("#factDescargar")){ const r = factCorreo(); descargarHtml(r.html, `factibilidad_${hoyCL()}.html`, "Trabajos que requieren estudio de factibilidad"); }
+  else if (t.closest("#factExportar")){
+    const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([JSON.stringify(FACT, null, 1)], {type: "application/json"})); a.download = `factibilidad_lista_${hoyCL()}.json`;
+    document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  }
+  else if (t.closest("#segCopiar")){ const r = seguimientoCorreo(); aviso(await copiarHtml(r.html, textoPlano(r.html)) ? `Calendario copiado (${r.n} PT). Pégalo en el cuerpo del correo con Ctrl+V.` : "No se pudo copiar. Usa «Descargar»."); }
+  else if (t.closest("#segDescargar")){ const r = seguimientoCorreo(); descargarHtml(r.html, r.nombre, "Seguimiento de PT"); }
+});
+document.addEventListener("change", ev => {
+  const t = ev.target;
+  if (t.matches(".fin[data-fpt]")){ const f = FACT[t.dataset.fpt]; if (f){ f[t.dataset.fk] = t.value.trim(); guardarFact(); } }
+  else if (t.id === "factPasados"){ S.factPasados = t.checked; render(); }
+  else if (t.id === "segRango"){ S.segRango = t.value; }
+  else if (t.id === "factImportar" && t.files[0]){
+    const lector = new FileReader();
+    lector.onload = () => {
+      try {
+        const nuevo = JSON.parse(lector.result); let n = 0;
+        for (const pt in nuevo){ if (/^\d{4}-\d+$/.test(pt) && nuevo[pt] && typeof nuevo[pt] === "object"){ FACT[pt] = Object.assign({ini0: "", comp: "", desc: "", obs: ""}, FACT[pt] || {}, nuevo[pt]); n++; } }
+        guardarFact(); actualizarBotonFact(); render(); aviso(`Lista importada: ${n} PT.`);
+      } catch (e) { aviso("El archivo no es una lista de Factibilidad válida."); }
+    };
+    lector.readAsText(t.files[0]);
+  }
+});
 
 function render(){
   document.getElementById("alerts").innerHTML = ALERTS.map(a => `<button class="al ${a.cls}" data-al="${a.id}" aria-pressed="${S.al === a.id}"><b>${a.t}</b><span>${S.al === a.id ? "Filtrando · clic para quitar" : "Clic para filtrar"}</span><em>${data.filter(a.f).length}</em></button>`).join("");
@@ -443,6 +651,7 @@ function render(){
   document.querySelectorAll("[data-rango]").forEach(b => { const r = rango(b.dataset.rango); b.setAttribute("aria-pressed", S.d1 === r[0] && S.d2 === r[1]); });
   if (S.view === "cal"){ document.getElementById("days").innerHTML = calHtml(list); return; }
   if (S.view === "seg"){ document.getElementById("days").innerHTML = segHtml(filtered(true)); return; }
+  if (S.view === "fact"){ document.getElementById("days").innerHTML = factHtml(); return; }
   // El filtro de fechas usa la fecha de inicio (como "Desde" en Centrality); solo aparecen los días con PT.
   const dates = [...new Set((S.d1 || S.d2 ? list : data).map(x => x.a.date))].sort();
   document.getElementById("days").innerHTML = dates.map(dt => {
@@ -489,12 +698,14 @@ document.getElementById("tipo").addEventListener("change", ev => { S.tipo = ev.t
 document.getElementById("prog").addEventListener("change", ev => { S.prog = ev.target.value; render(); });
 document.getElementById("soloFp").addEventListener("click", ev => { S.fp = !S.fp; ev.currentTarget.setAttribute("aria-pressed", S.fp); render(); });
 document.getElementById("conAdj").addEventListener("click", ev => { S.adj = !S.adj; ev.currentTarget.setAttribute("aria-pressed", S.adj); render(); });
-const vT = document.getElementById("vTabla"), vC = document.getElementById("vCal"), vS = document.getElementById("vSeg");
-function setView(v){ S.view = v; vT.setAttribute("aria-pressed", v === "tabla"); vC.setAttribute("aria-pressed", v === "cal"); vS.setAttribute("aria-pressed", v === "seg"); try { localStorage.setItem("c2vista", v); } catch (e) {} render(); }
+const vT = document.getElementById("vTabla"), vC = document.getElementById("vCal"), vS = document.getElementById("vSeg"), vF = document.getElementById("vFact");
+function setView(v){ S.view = v; vT.setAttribute("aria-pressed", v === "tabla"); vC.setAttribute("aria-pressed", v === "cal"); vS.setAttribute("aria-pressed", v === "seg"); vF.setAttribute("aria-pressed", v === "fact"); try { localStorage.setItem("c2vista", v); } catch (e) {} render(); }
 vS.onclick = () => setView("seg");
+vF.onclick = () => setView("fact");
+actualizarBotonFact();
 vT.onclick = () => setView("tabla");
 vC.onclick = () => setView("cal");
-try { const v = localStorage.getItem("c2vista"); if (v === "cal" || v === "seg") { S.view = v; vT.setAttribute("aria-pressed", "false"); (v === "cal" ? vC : vS).setAttribute("aria-pressed", "true"); } } catch (e) {}
+try { const v = localStorage.getItem("c2vista"); if (v === "cal" || v === "seg" || v === "fact") { S.view = v; vT.setAttribute("aria-pressed", "false"); ({cal: vC, seg: vS, fact: vF})[v].setAttribute("aria-pressed", "true"); } } catch (e) {}
 
 const drawer = document.getElementById("drawer"); let cur = null, tab = "gen";
 function drawD(){
@@ -507,7 +718,7 @@ function drawD(){
   else h = x.adj.length ? `<p class="src">Los enlaces abren el archivo en Centrality; necesitas tener sesión iniciada allí.</p><div class="tw"><table><thead><tr><th>Nombre</th><th>Tamaño</th><th>Tipo</th><th>Creado</th><th>Creador</th></tr></thead><tbody>${x.adj.map(a => `<tr><td><a href="${BASE_URL}fh_get_file.php?id=${a[0]}&download=1" target="_blank" rel="noopener">${esc(a[1])}</a></td><td>${esc(a[2])}</td><td>${esc(a[3])}</td><td>${fmt(a[5]).full}</td><td>${esc(a[6])}</td></tr>`).join("")}</tbody></table></div>` : `<p class="muted">Este PT no tiene archivos adjuntos en Centrality.</p>`;
   document.getElementById("dBody").innerHTML = h;
 }
-function openPT(pt){ cur = data.find(x => x.pt === pt); if (!cur) return; tab = "gen"; document.getElementById("dTitle").textContent = cur.pt; document.getElementById("dPills").innerHTML = pill(cur) + (cur.fp ? '<span class="fp" style="font-size:11px;padding:1px 6px">FUERA DE PLAZO</span>' : "") + `<span class="mk">${cur.cond.length} condiciones</span><span class="mk">${cur.adj.length} adjuntos</span>`; drawer.hidden = false; drawD(); document.getElementById("dClose").focus(); }
+function openPT(pt){ cur = data.find(x => x.pt === pt); if (!cur) return; tab = "gen"; document.getElementById("dTitle").textContent = cur.pt; document.getElementById("dPills").innerHTML = pill(cur) + (cur.fp ? '<span class="fp" style="font-size:11px;padding:1px 6px">FUERA DE PLAZO</span>' : "") + `<span class="mk">${cur.cond.length} condiciones</span><span class="mk">${cur.adj.length} adjuntos</span>`; drawer.hidden = false; drawD(); marcarFactDrawer(); document.getElementById("dClose").focus(); }
 document.getElementById("dClose").onclick = () => { drawer.hidden = true; };
 document.querySelectorAll(".dtabs button").forEach(b => b.onclick = () => { tab = b.dataset.t; drawD(); });
 render();
