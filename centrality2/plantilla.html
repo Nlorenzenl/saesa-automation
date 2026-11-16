@@ -246,7 +246,7 @@ a{color:var(--accent)}
   </div>
   <div class="chips" id="zonas" role="group" aria-label="Zona"></div>
   <details class="estsel" id="estSel"><summary id="estSum">Todos los estados</summary><div class="panel" id="estPanel"></div></details>
-  <select class="sel" id="tipo" aria-label="Tipo de PT"><option value="">Todos los tipos</option></select>
+  <details class="estsel" id="tipSel"><summary id="tipSum">Todos los tipos</summary><div class="panel" id="tipPanel" style="width:min(300px,calc(100vw - 32px))"></div></details>
   <select class="sel" id="prog" aria-label="Programador"><option value="">Todos los programadores</option></select>
   <button class="chip" id="soloFp" aria-pressed="false">Solo fuera de plazo</button>
   <button class="chip" id="conAdj" aria-pressed="false">Con adjuntos</button>
@@ -303,8 +303,8 @@ const ALERTS = [
   {id:"fp", cls:"warn", t:"Fuera de plazo", f:x => x.fp},
   {id:"prog", cls:"", t:"Sin programador", f:x => !x.sig && !["anul"].includes(x.e)}
 ];
-const S = {z:new Set(), est:new Set(), tipo:"", prog:"", fp:false, adj:false, al:"", q:"", view:"tabla", d1:"", d2:"", mes:"", segTodos:false, segOpen:new Set(), segRango:"", factPasados:false, closed:new Set(), shown:{}};
-const filtered = (sinFechas) => { const q = S.q.toLowerCase(); const al = ALERTS.find(a => a.id === S.al); return data.filter(x => (!S.z.size || S.z.has(x.zg)) && (!S.est.size || S.est.has(x.estado)) && (!S.tipo || x.tipoC === S.tipo) && (!S.prog || x.sig === S.prog) && (!S.fp || x.fp) && (!S.adj || x.adj.length) && (!al || al.f(x)) && (!q || x.hay.includes(q)) && (sinFechas || ((!S.d1 || x.a.date >= S.d1) && (!S.d2 || x.a.date <= S.d2)))); };
+const S = {z:new Set(), est:new Set(), tipo:"", prog:"", fp:false, adj:false, al:"", q:"", view:"tabla", d1:"", d2:"", tipos:new Set(), mes:"", segTodos:false, segOpen:new Set(), segRango:"", factPasados:false, closed:new Set(), shown:{}};
+const filtered = (sinFechas) => { const q = S.q.toLowerCase(); const al = ALERTS.find(a => a.id === S.al); return data.filter(x => (!S.z.size || S.z.has(x.zg)) && (!S.est.size || S.est.has(x.estado)) && (!S.tipos.size || S.tipos.has(x.tipoC)) && (!S.prog || x.sig === S.prog) && (!S.fp || x.fp) && (!S.adj || x.adj.length) && (!al || al.f(x)) && (!q || x.hay.includes(q)) && (sinFechas || ((!S.d1 || x.a.date >= S.d1) && (!S.d2 || x.a.date <= S.d2)))); };
 // "Hoy" según el reloj de quien mira la página (hora de Chile), no la fecha de la última lectura.
 const hoyCL = (dias = 0) => new Intl.DateTimeFormat("en-CA", {timeZone:"America/Santiago"}).format(new Date(Date.now() + dias * 864e5));
 const rango = r => r === "hoy" ? [hoyCL(), hoyCL()] : r === "manana" ? [hoyCL(1), hoyCL(1)] : [hoyCL(), hoyCL(6)];
@@ -358,7 +358,7 @@ const ddmm = d => d.slice(8, 10) + "/" + d.slice(5, 7);
 function segHtml(list){
   S.mes = S.mes || TODAY.slice(0, 7);
   const ym = S.mes, plan = (META.planes || {})[ym], pp = plan ? plan.pts : {};
-  const hayFiltro = !!(S.z.size || S.est.size || S.tipo || S.prog || S.fp || S.adj || S.al || S.q);
+  const hayFiltro = !!(S.z.size || S.est.size || S.tipos.size || S.prog || S.fp || S.adj || S.al || S.q);
   const porPT = new Map(data.map(x => [x.pt, x])), visible = new Set(list.map(x => x.pt));
   const hoy = hoyCL();
 
@@ -496,28 +496,60 @@ function semanasDelMes(ym){
   }
   return out;
 }
+// Colores por estado de seguimiento: [fondo, texto/borde]. Funcionan en Outlook (tablas y estilos en línea).
+const SEGC = {ejec:["#e4f3e8","#1e6b3a"], reprog:["#fff0d4","#8a5a00"], canc:["#fde3e0","#a3271b"], prog:["#e3ecf8","#1d5a9e"], tram:["#efefef","#555555"]};
+const escRe = s => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+// Quita del inicio de la descripción el nombre de la S/E repetido ("SE ANDES ; Reemplazo…" → "Reemplazo…")
+const descCorta = x => {
+  let d = String(x.desc || "").trim();
+  if (x.se) d = d.replace(new RegExp("^(S\\/?E\\s*)?" + escRe(x.se) + "\\s*[;\\/:,-]+\\s*", "i"), "");
+  d = d.replace(/\s+/g, " ");
+  return d.length > 110 ? d.slice(0, 107).trimEnd() + "…" : d;
+};
 function seguimientoCorreo(){
   const ym = S.mes, rango = S.segRango ? S.segRango.split("|") : [ym + "-01", semanasDelMes(ym).slice(-1)[0][1]];
   const plan = (META.planes || {})[ym], pp = plan ? plan.pts : {};
-  const lista = filtered(true).filter(x => x.a.date >= rango[0] && x.a.date <= rango[1]).sort((p, q) => p.a.date.localeCompare(q.a.date) || p.a.hm.localeCompare(q.a.hm));
-  const porDia = {}; lista.forEach(x => (porDia[x.a.date] = porDia[x.a.date] || []).push(x));
-  const td = "border:1px solid #808080;padding:4px 5px;vertical-align:top;font:11px Calibri,Arial,sans-serif;color:#000;width:14.2%";
-  const th = "border:1px solid #808080;padding:3px;background:#ffff00;font:bold 11px Calibri,Arial,sans-serif;color:#000;text-align:center";
-  const entrada = x => {
+  const lista = filtered(true).filter(x => x.a.date >= rango[0] && x.a.date <= rango[1]).sort((p, q) => p.a.date.localeCompare(q.a.date) || p.a.hm.localeCompare(q.a.hm) || p.pt.localeCompare(q.pt));
+  const porDia = {}, cuenta = {};
+  const items = lista.map(x => {
     let cat = segE(x.estado), extra = "";
-    if (plan && pp[x.pt]){ const pd = fmt(pp[x.pt][0]).date; if (pd !== x.a.date){ extra = `<br>Reprogramado desde ${ddmm(pd)}`; if (cat !== "ejec" && cat !== "canc") cat = "reprog"; } }
-    else if (plan) extra = "<br>Agregado durante el mes";
-    return `-S/E ${esc(x.se || x.ref || "—")}<br>${x.a.hm} - ${x.b.hm}${x.b.date !== x.a.date ? " (" + x.b.dm + ")" : ""}<br>${esc(x.desc)}<br>PT: ${x.pt}<br>${esc(x.area || "")}<br><b>ESTADO: ${SEG[cat]}</b>${extra}`;
+    if (plan && pp[x.pt]){ const pd = fmt(pp[x.pt][0]).date; if (pd !== x.a.date){ extra = `Reprogramado desde ${ddmm(pd)}`; if (cat !== "ejec" && cat !== "canc") cat = "reprog"; } }
+    else if (plan) extra = "Agregado durante el mes";
+    cuenta[cat] = (cuenta[cat] || 0) + 1;
+    return {x, cat, extra};
+  });
+  items.forEach(it => (porDia[it.x.a.date] = porDia[it.x.a.date] || []).push(it));
+  const F = "font-family:Calibri,Arial,sans-serif";
+  const tarjeta = ({x, cat, extra}) => {
+    const [bg, fg] = SEGC[cat];
+    return `<table cellspacing="0" cellpadding="0" width="100%" style="border-collapse:collapse;margin:0 0 5px"><tr><td style="background:${bg};border-left:4px solid ${fg};padding:4px 6px;${F};font-size:11px;line-height:1.3;color:#1a1a1a">`
+      + `<b style="font-size:12px">${esc(x.se ? "S/E " + x.se : (x.ref || "—"))}</b><br>`
+      + `<b>${x.a.hm}–${x.b.hm}</b>${x.b.date !== x.a.date ? " (hasta " + x.b.dm + ")" : ""} · ${esc(tipoCorto(x.tipoC))}<br>`
+      + `<span style="color:#444">${esc(descCorta(x))}</span><br>`
+      + `PT ${x.pt} &nbsp;<b style="color:${fg}">${SEG[cat].toUpperCase()}</b>`
+      + (extra ? `<br><i style="color:${SEGC.reprog[1]}">${esc(extra)}</i>` : "")
+      + `</td></tr></table>`;
   };
-  // Semanas de lunes a domingo; los días fuera del rango quedan vacíos
-  let html = `<p style="font:bold 14px Calibri,Arial,sans-serif;margin:0 0 6px">Seguimiento de PT · ${dmyG(rango[0]).replace(/-/g, "/")} al ${dmyG(rango[1]).replace(/-/g, "/")}</p><table cellspacing="0" cellpadding="0" style="border-collapse:collapse;width:100%;max-width:1100px">`;
+  const titulo = `Seguimiento de PT · ${dmyG(rango[0]).replace(/-/g, "/")} al ${dmyG(rango[1]).replace(/-/g, "/")}`;
+  const filtros = [S.tipos.size ? [...S.tipos].join(", ") : "", S.z.size ? [...S.z].join(", ") : "", S.prog ? "Programador " + S.prog : ""].filter(Boolean).join(" · ");
+  const leyenda = Object.keys(SEG).map(k => `<span style="display:inline-block;margin:0 10px 0 0;white-space:nowrap"><span style="display:inline-block;width:10px;height:10px;background:${SEGC[k][0]};border-left:3px solid ${SEGC[k][1]};vertical-align:middle"></span> ${SEG[k]}: <b>${cuenta[k] || 0}</b></span>`).join("");
+  let html = `<p style="${F};font-size:15px;font-weight:bold;margin:0 0 2px;color:#1a1a1a">${titulo}</p>`
+    + `<p style="${F};font-size:12px;margin:0 0 8px;color:#444">${lista.length} PT${filtros ? " · " + esc(filtros) : ""}</p>`
+    + `<p style="${F};font-size:11px;margin:0 0 8px;color:#1a1a1a">${leyenda}</p>`
+    + `<table cellspacing="0" cellpadding="0" style="border-collapse:collapse;width:100%;max-width:1150px;table-layout:fixed">`;
   let d = new Date(rango[0] + "T12:00:00"); d.setDate(d.getDate() - (d.getDay() + 6) % 7);
   const fin = new Date(rango[1] + "T12:00:00");
   while (d <= fin){
     const dias = [];
     for (let i = 0; i < 7; i++){ const x = new Date(d); x.setDate(d.getDate() + i); dias.push(x.toISOString().slice(0, 10)); }
-    html += "<tr>" + dias.map((dt, i) => `<td style="${th}">${DOWS[i].toUpperCase()}<br>${dmyG(dt)}</td>`).join("") + "</tr>";
-    html += "<tr>" + dias.map(dt => `<td style="${td}">${dt >= rango[0] && dt <= rango[1] ? (porDia[dt] || []).map(entrada).join("<br><br>") : ""}</td>`).join("") + "</tr>";
+    html += "<tr>" + dias.map((dt, i) => {
+      const dentro = dt >= rango[0] && dt <= rango[1], n = (porDia[dt] || []).length;
+      return `<td style="background:${dentro ? "#2f3e4f" : "#9aa3ad"};color:#fff;padding:4px 6px;${F};font-size:11px;border:1px solid #ffffff;width:14.28%"><b>${DOWS[i]} ${dt.slice(8, 10)}/${dt.slice(5, 7)}</b>${dentro && n ? `<span style="float:right">${n} PT</span>` : ""}</td>`;
+    }).join("") + "</tr>";
+    html += "<tr>" + dias.map(dt => {
+      const dentro = dt >= rango[0] && dt <= rango[1], its = porDia[dt] || [];
+      return `<td style="vertical-align:top;padding:4px;border:1px solid #d9d9d9;background:${dentro ? "#ffffff" : "#f4f4f4"}">${!dentro ? "" : its.length ? its.map(tarjeta).join("") : `<span style="${F};font-size:11px;color:#999">Sin trabajos</span>`}</td>`;
+    }).join("") + "</tr>";
     d.setDate(d.getDate() + 7);
   }
   html += "</table>";
@@ -675,7 +707,19 @@ document.getElementById("estTodos").addEventListener("click", () => { S.est.clea
 document.getElementById("estCerrar").addEventListener("click", () => { document.getElementById("estSel").open = false; });
 document.addEventListener("click", ev => { const d = document.getElementById("estSel"); if (d.open && !d.contains(ev.target)) d.open = false; });
 const addOpts = (id, vals) => vals.forEach(v => { const o = document.createElement("option"); o.value = v; o.textContent = v; document.getElementById(id).appendChild(o); });
-addOpts("tipo", [...new Set(data.map(x => x.tipoC))].sort());
+{
+  // Tipos agrupados como se habla de ellos: desconexiones, intervenciones, SODI, etc.
+  const n = {}; data.forEach(x => n[x.tipoC] = (n[x.tipoC] || 0) + 1);
+  const ORDEN_T = ["Desconexión IE", "Desconexión IN", "Intervención IE", "Intervención IN", "SODI Terceros", "Sin Condiciones", "Acceso", "Curso Forzoso", "Otro"];
+  const tipos = Object.keys(n).sort((a, b) => (ORDEN_T.indexOf(a) + 99 * (ORDEN_T.indexOf(a) < 0)) - (ORDEN_T.indexOf(b) + 99 * (ORDEN_T.indexOf(b) < 0)));
+  document.getElementById("tipPanel").innerHTML = tipos.map(k => `<label><input type="checkbox" data-tip="${esc(k)}"><span>${esc(k)}</span><em>${n[k]}</em></label>`).join("")
+    + `<div class="acc"><button class="chip" id="tipTodos">Quitar selección</button><button class="chip" id="tipCerrar">Cerrar</button></div>`;
+}
+const tipSum = () => { const k = [...S.tipos]; document.getElementById("tipSum").textContent = !k.length ? "Todos los tipos" : k.length <= 2 ? k.join(" + ") : `${k.length} tipos`; document.getElementById("tipSel").classList.toggle("on", k.length > 0); };
+document.getElementById("tipPanel").addEventListener("change", ev => { const k = ev.target.dataset.tip; if (k == null) return; ev.target.checked ? S.tipos.add(k) : S.tipos.delete(k); tipSum(); render(); });
+document.getElementById("tipTodos").addEventListener("click", () => { S.tipos.clear(); document.querySelectorAll("#tipPanel input").forEach(i => i.checked = false); tipSum(); render(); });
+document.getElementById("tipCerrar").addEventListener("click", () => { document.getElementById("tipSel").open = false; });
+document.addEventListener("click", ev => { const d = document.getElementById("tipSel"); if (d.open && !d.contains(ev.target)) d.open = false; });
 addOpts("prog", [...new Set(data.map(x => x.sig).filter(Boolean))].sort());
 document.addEventListener("click", ev => {
   const t = ev.target;
@@ -694,7 +738,6 @@ document.addEventListener("keydown", ev => { if (ev.key === "Enter" && ev.target
 document.getElementById("fDesde").addEventListener("change", ev => { S.d1 = ev.target.value; if (S.d2 && S.d1 > S.d2) S.d2 = S.d1; render(); });
 document.getElementById("fHasta").addEventListener("change", ev => { S.d2 = ev.target.value; if (S.d1 && S.d2 < S.d1) S.d1 = S.d2; render(); });
 document.getElementById("q").addEventListener("input", ev => { S.q = ev.target.value; render(); });
-document.getElementById("tipo").addEventListener("change", ev => { S.tipo = ev.target.value; render(); });
 document.getElementById("prog").addEventListener("change", ev => { S.prog = ev.target.value; render(); });
 document.getElementById("soloFp").addEventListener("click", ev => { S.fp = !S.fp; ev.currentTarget.setAttribute("aria-pressed", S.fp); render(); });
 document.getElementById("conAdj").addEventListener("click", ev => { S.adj = !S.adj; ev.currentTarget.setAttribute("aria-pressed", S.adj); render(); });
