@@ -86,6 +86,48 @@ main .inner{display:grid;gap:14px;padding-block:4px 60px}
 .pill i{width:7px;height:7px;border-radius:50%;background:var(--e);flex:none}
 .c-est .pill,#dPills .pill{white-space:normal;align-items:baseline;line-height:1.3;padding:2px 8px}
 .estsel{position:relative}
+/* Seguimiento mensual */
+.segbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin-bottom:12px}
+.segbar h2{margin:0;font:700 20px var(--f-display);text-transform:capitalize;min-width:170px;text-align:center}
+.segbar .note{font-size:12px;color:var(--muted);flex-basis:100%}
+.segbar label{display:inline-flex;gap:6px;align-items:center;font-size:13px;color:var(--muted)}
+.ssum{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin-bottom:12px}
+.ssum div{background:var(--surface);border:1px solid var(--line);border-left:4px solid var(--sc,var(--muted));border-radius:var(--r);padding:8px 10px}
+.ssum b{display:block;font:800 22px/1.1 var(--f-display);font-variant-numeric:tabular-nums}
+.ssum span{font-size:12px;color:var(--muted)}
+.s-ejec{--sc:var(--ok)} .s-reprog{--sc:var(--warn)} .s-canc{--sc:var(--crit)} .s-prog{--sc:var(--accent)} .s-tram{--sc:var(--muted)} .s-plan{--sc:var(--ink)} .s-agr{--sc:var(--e-susp)}
+.sgrid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));background:var(--surface);border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.sdow{padding:6px 8px;font:600 11px var(--f-body);text-transform:uppercase;letter-spacing:.05em;color:var(--muted);background:var(--surface-2);border-bottom:1px solid var(--line)}
+.scell{border-right:1px solid var(--line);border-bottom:1px solid var(--line);padding:6px;display:grid;gap:5px;align-content:start;min-height:90px;min-width:0}
+.scell:nth-child(7n){border-right:0}
+.scell.out{background:var(--surface-2)}
+.scell.hoy{box-shadow:inset 0 0 0 2px var(--accent)}
+.scell .dn{display:flex;justify-content:space-between;align-items:baseline;font-size:12px;color:var(--muted)}
+.scell .dn b{font:700 14px var(--f-display);color:var(--ink)}
+.scell .dn .dnw{display:none}
+.sc{appearance:none;text-align:left;font:inherit;color:inherit;cursor:pointer;background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--sc);border-radius:4px;padding:5px 6px;display:grid;gap:1px;font-size:11.5px;line-height:1.3;min-width:0}
+.sc:hover{border-color:var(--sc)}
+.sc b{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sc .d{color:var(--muted);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.sc .m{font-variant-numeric:tabular-nums}
+.sc .st{font-weight:700;color:var(--sc)}
+.sc .tag{font-size:10.5px;font-weight:600;color:var(--warn)}
+.sc.ghost{opacity:.6;border-style:dashed;border-left-style:solid;background:transparent}
+.sc.ghost b{text-decoration:line-through}
+.sc:disabled{cursor:default}
+.smas{appearance:none;border:0;background:none;color:var(--accent);font:600 12px var(--f-body);cursor:pointer;text-align:left;padding:2px}
+@media (max-width:760px){
+  .sgrid{grid-template-columns:1fr}
+  .sdow,.scell.out,.scell.vacio{display:none}
+  .scell{border-right:0;min-height:0}
+  .scell .dn .dnw{display:inline}
+}
+@media print{
+  header.top,.toolbar,.alerts,.drawer,.noprint{display:none!important}
+  body{background:#fff}
+  .sgrid{border-radius:0}
+  .sc{break-inside:avoid}
+}
 .estsel summary{list-style:none;cursor:pointer;border:1px solid var(--line);background:var(--surface);border-radius:var(--r);padding:6px 10px;font-size:13px;white-space:nowrap}
 .estsel summary::-webkit-details-marker{display:none}
 .estsel[open] summary,.estsel.on summary{border-color:var(--ink)}
@@ -177,7 +219,7 @@ a{color:var(--accent)}
 </div></header>
 
 <div class="toolbar g"><div class="inner">
-  <div class="seg" role="group" aria-label="Vista"><button id="vTabla" aria-pressed="true">Tabla</button><button id="vCal" aria-pressed="false">Calendario</button></div>
+  <div class="seg" role="group" aria-label="Vista"><button id="vTabla" aria-pressed="true">Tabla</button><button id="vCal" aria-pressed="false">Calendario</button><button id="vSeg" aria-pressed="false">Seguimiento</button></div>
   <div class="fechas" role="group" aria-label="Fechas">
     <label title="Fecha de inicio del PT">Inicio desde <input type="date" class="fecha" id="fDesde"></label>
     <label>Hasta <input type="date" class="fecha" id="fHasta"></label>
@@ -245,8 +287,8 @@ const ALERTS = [
   {id:"fp", cls:"warn", t:"Fuera de plazo", f:x => x.fp},
   {id:"prog", cls:"", t:"Sin programador", f:x => !x.sig && !["anul"].includes(x.e)}
 ];
-const S = {z:new Set(), est:new Set(), tipo:"", prog:"", fp:false, adj:false, al:"", q:"", view:"tabla", d1:"", d2:"", closed:new Set(), shown:{}};
-const filtered = () => { const q = S.q.toLowerCase(); const al = ALERTS.find(a => a.id === S.al); return data.filter(x => (!S.z.size || S.z.has(x.zg)) && (!S.est.size || S.est.has(x.estado)) && (!S.tipo || x.tipoC === S.tipo) && (!S.prog || x.sig === S.prog) && (!S.fp || x.fp) && (!S.adj || x.adj.length) && (!al || al.f(x)) && (!q || x.hay.includes(q)) && (!S.d1 || x.a.date >= S.d1) && (!S.d2 || x.a.date <= S.d2)); };
+const S = {z:new Set(), est:new Set(), tipo:"", prog:"", fp:false, adj:false, al:"", q:"", view:"tabla", d1:"", d2:"", mes:"", segTodos:false, segOpen:new Set(), closed:new Set(), shown:{}};
+const filtered = (sinFechas) => { const q = S.q.toLowerCase(); const al = ALERTS.find(a => a.id === S.al); return data.filter(x => (!S.z.size || S.z.has(x.zg)) && (!S.est.size || S.est.has(x.estado)) && (!S.tipo || x.tipoC === S.tipo) && (!S.prog || x.sig === S.prog) && (!S.fp || x.fp) && (!S.adj || x.adj.length) && (!al || al.f(x)) && (!q || x.hay.includes(q)) && (sinFechas || ((!S.d1 || x.a.date >= S.d1) && (!S.d2 || x.a.date <= S.d2)))); };
 // "Hoy" según el reloj de quien mira la página (hora de Chile), no la fecha de la última lectura.
 const hoyCL = (dias = 0) => new Intl.DateTimeFormat("en-CA", {timeZone:"America/Santiago"}).format(new Date(Date.now() + dias * 864e5));
 const rango = r => r === "hoy" ? [hoyCL(), hoyCL()] : r === "manana" ? [hoyCL(1), hoyCL(1)] : [hoyCL(), hoyCL(6)];
@@ -290,6 +332,109 @@ function calHtml(list){
     return `<section class="cal"><header><h2>${MESES[m - 1]} ${y}</h2><div class="legend">${leg}</div></header><div class="calscroll"><div class="grid">${["Lun","Mar","Mié","Jue","Vie","Sáb","Dom"].map(d => `<div class="dow">${d}</div>`).join("")}${cells.join("")}</div></div></section>`;
   }).join("");
 }
+// ---------- Seguimiento mensual ----------
+// Estado de seguimiento (como el calendario de mantenimiento), a partir del estado de Centrality.
+const SEG = {ejec:"Ejecutado", reprog:"Reprogramado", canc:"Cancelado", prog:"Programado", tram:"En trámite"};
+const segE = s => /^Hecha/.test(s) ? "ejec" : /Faena se reprograma/.test(s) ? "reprog" : /^(Cancelada|Rechazada|Riesgo inminente|Autoridad|Otros)/.test(s) ? "canc" : /^En An/.test(s) ? "prog" : "tram";
+const DOWS = ["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domingo"];
+const POR_DIA = 8;
+const ddmm = d => d.slice(8, 10) + "/" + d.slice(5, 7);
+function segHtml(list){
+  S.mes = S.mes || TODAY.slice(0, 7);
+  const ym = S.mes, plan = (META.planes || {})[ym], pp = plan ? plan.pts : {};
+  const hayFiltro = !!(S.z.size || S.est.size || S.tipo || S.prog || S.fp || S.adj || S.al || S.q);
+  const porPT = new Map(data.map(x => [x.pt, x])), visible = new Set(list.map(x => x.pt));
+  const hoy = hoyCL();
+
+  // Tarjetas: PT cuyo inicio actual cae en el mes
+  const tarjetas = list.filter(x => x.a.date.slice(0, 7) === ym).map(x => {
+    let cat = segE(x.estado), tag = "";
+    if (plan){
+      if (!pp[x.pt]) tag = "Agregado durante el mes";
+      else {
+        const pd = fmt(pp[x.pt][0]).date;
+        if (pd !== x.a.date){ tag = `Reprogramado desde ${ddmm(pd)}${pd.slice(0, 7) !== ym ? "/" + pd.slice(0, 4) : ""}`; if (cat !== "ejec" && cat !== "canc") cat = "reprog"; }
+      }
+    }
+    return {x, cat, tag, dia: x.a.date};
+  });
+
+  // Resumen sobre los PT del plan (respetando los filtros) y tarjetas tachadas donde estaban planificados
+  const fuera = new Map((META.plan_fuera || []).map(r => [r.pt, r]));
+  const R = {plan:0, ejec:0, reprog:0, canc:0, prog:0, tram:0, nada:0, venc:0, ejecVenc:0};
+  const fantasmas = [];
+  for (const pt in pp){
+    const pd = fmt(pp[pt][0]).date, x = porPT.get(pt);
+    if (x ? !visible.has(pt) : hayFiltro) continue;
+    R.plan++;
+    if (pd < hoy) R.venc++;
+    if (!x){
+      R.nada++;
+      const r = fuera.get(pt) || {};
+      fantasmas.push({pt, dia: pd, se: subest(r.ref || "") || r.ref || "", txt: "Ya no está en Centrality o salió del rango", click: false});
+      continue;
+    }
+    let cat = segE(x.estado);
+    const movido = pd !== x.a.date;
+    if (movido && cat !== "ejec" && cat !== "canc") cat = "reprog";
+    R[cat]++;
+    if (cat === "ejec" && pd < hoy) R.ejecVenc++;
+    if (movido) fantasmas.push({pt, dia: pd, se: x.se, txt: `Movido al ${x.a.date.slice(0, 7) === ym ? x.a.dm : x.a.full.slice(0, 10)}`, click: true});
+  }
+  const agregados = tarjetas.filter(t => t.tag.startsWith("Agregado")).length;
+
+  const [y, m] = ym.split("-").map(Number);
+  const tomadaTxt = plan ? new Intl.DateTimeFormat("es-CL", {timeZone:"America/Santiago", day:"2-digit", month:"2-digit", year:"numeric", hour:"2-digit", minute:"2-digit", hour12:false}).format(new Date(plan.tomada)) : "";
+  const tardia = plan && plan.tomada.slice(8, 10) !== "01";
+  const pct = R.venc ? Math.round(R.ejecVenc / R.venc * 100) : null;
+  const caja = (cls, n, t) => `<div class="${cls}"><b>${n}</b><span>${t}</span></div>`;
+  let resumen;
+  if (plan){
+    resumen = `<div class="ssum">${caja("s-plan", R.plan, "PT en el plan")}${caja("s-ejec", R.ejec, "Ejecutados")}${caja("s-reprog", R.reprog, "Reprogramados")}${caja("s-canc", R.canc + R.nada, "Cancelados o fuera")}${caja("s-prog", R.prog, "Programados")}${caja("s-tram", R.tram, "En trámite")}${caja("s-agr", agregados, "Agregados durante el mes")}${caja("s-ejec", pct == null ? "—" : pct + "%", pct == null ? "Cumplimiento (aún sin días vencidos)" : `Cumplimiento a la fecha: ${R.ejecVenc} de ${R.venc} ya vencidos`)}</div>`;
+  } else {
+    const c = {}; tarjetas.forEach(t => c[t.cat] = (c[t.cat] || 0) + 1);
+    resumen = `<div class="ssum">${caja("s-plan", tarjetas.length, "PT en el mes")}${Object.keys(SEG).map(k => caja("s-" + k, c[k] || 0, SEG[k])).join("")}</div>`;
+  }
+  const nota = !plan
+    ? "Este mes no tiene foto del plan (el seguimiento empezó en noviembre de 2026): se muestra el estado actual, sin comparar contra lo planificado."
+    : `Plan: lo que estaba en Centrality para este mes el ${tomadaTxt}.` + (tardia ? " Esta foto no es del día 1 porque el seguimiento empezó a mitad de mes; desde el próximo mes se toma el día 1." : "") + " Las tarjetas tachadas marcan dónde estaba planificado un PT que se movió.";
+
+  // Grilla semanal de lunes a domingo
+  const first = new Date(y, m - 1, 1), off = (first.getDay() + 6) % 7, last = new Date(y, m, 0).getDate();
+  const porDia = {}; tarjetas.forEach(t => (porDia[t.dia] = porDia[t.dia] || []).push(t));
+  const fanDia = {}; fantasmas.forEach(f => (fanDia[f.dia] = fanDia[f.dia] || []).push(f));
+  const cells = [];
+  for (let i = 0; i < off; i++) cells.push(`<div class="scell out"></div>`);
+  for (let d = 1; d <= last; d++){
+    const dt = `${ym}-${String(d).padStart(2, "0")}`, dow = DOWS[(off + d - 1) % 7];
+    const ts = (porDia[dt] || []).sort((p, q) => p.x.a.hm.localeCompare(q.x.a.hm) || p.x.pt.localeCompare(q.x.pt));
+    const fs = fanDia[dt] || [];
+    const abiertos = S.segTodos || S.segOpen.has(dt), lim = abiertos ? Infinity : POR_DIA;
+    const cards = ts.slice(0, lim).map(t => `<button class="sc s-${t.cat}" data-pt="${t.x.pt}" title="${esc(t.x.estado)}"><b>S/E ${esc(t.x.se || "—")}</b><span class="m">${t.x.a.hm}–${t.x.b.hm}${t.x.b.date !== t.x.a.date ? " (hasta " + t.x.b.dm + ")" : ""}</span><span class="d">${esc(t.x.desc)}</span><span class="m">PT ${t.x.pt} · ${esc(t.x.area || "")}</span><span class="st">${SEG[t.cat]}</span>${t.tag ? `<span class="tag">${esc(t.tag)}</span>` : ""}</button>`).join("");
+    const ghosts = fs.map(f => `<button class="sc ghost s-reprog"${f.click ? ` data-pt="${f.pt}"` : " disabled"}><b>PT ${f.pt}</b><span class="d">S/E ${esc(f.se || "—")}</span><span class="tag">${esc(f.txt)}</span></button>`).join("");
+    const mas = ts.length > lim ? `<button class="smas noprint" data-segmas="${dt}">Ver ${ts.length - lim} más</button>`
+      : (abiertos && !S.segTodos && ts.length > POR_DIA ? `<button class="smas noprint" data-segmenos="${dt}">Ver menos</button>` : "");
+    cells.push(`<div class="scell${dt === hoy ? " hoy" : ""}${ts.length || fs.length ? "" : " vacio"}"><div class="dn"><span><span class="dnw">${dow} </span><b>${d}</b></span><span>${ts.length ? ts.length + " PT" : ""}</span></div>${cards}${ghosts}${mas}</div>`);
+  }
+  while (cells.length % 7) cells.push(`<div class="scell out"></div>`);
+  return `<div class="segbar"><button class="btn noprint" data-segmes="-1" aria-label="Mes anterior">‹</button><h2>${MESES[m - 1]} ${y}</h2><button class="btn noprint" data-segmes="1" aria-label="Mes siguiente">›</button>
+    <label class="noprint"><input type="checkbox" id="segTodos"${S.segTodos ? " checked" : ""}> Mostrar todos los PT de cada día</label>
+    <button class="btn noprint" id="segPrint">Imprimir o guardar PDF</button>
+    <span class="note">${nota}${hayFiltro ? " Con filtros activos." : ""}</span></div>${resumen}
+    <div class="sgrid">${DOWS.map(d => `<div class="sdow">${d}</div>`).join("")}${cells.join("")}</div>`;
+}
+document.addEventListener("click", ev => {
+  const t = ev.target, mes = t.closest("[data-segmes]"), mas = t.closest("[data-segmas]"), menos = t.closest("[data-segmenos]");
+  if (mes){
+    const [y, m] = S.mes.split("-").map(Number), d = new Date(y, m - 1 + Number(mes.dataset.segmes), 1);
+    S.mes = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; S.segOpen.clear(); render();
+  }
+  else if (mas){ S.segOpen.add(mas.dataset.segmas); render(); }
+  else if (menos){ S.segOpen.delete(menos.dataset.segmenos); render(); }
+  else if (t.closest("#segPrint")){ const antes = S.segTodos; S.segTodos = true; render(); window.print(); S.segTodos = antes; render(); }
+});
+document.addEventListener("change", ev => { if (ev.target.id === "segTodos"){ S.segTodos = ev.target.checked; render(); } });
+
 function render(){
   document.getElementById("alerts").innerHTML = ALERTS.map(a => `<button class="al ${a.cls}" data-al="${a.id}" aria-pressed="${S.al === a.id}"><b>${a.t}</b><span>${S.al === a.id ? "Filtrando · clic para quitar" : "Clic para filtrar"}</span><em>${data.filter(a.f).length}</em></button>`).join("");
   const list = filtered(); document.getElementById("count").textContent = `${list.length} de ${data.length} PT`;
@@ -297,6 +442,7 @@ function render(){
   document.getElementById("fQuitar").hidden = !(S.d1 || S.d2);
   document.querySelectorAll("[data-rango]").forEach(b => { const r = rango(b.dataset.rango); b.setAttribute("aria-pressed", S.d1 === r[0] && S.d2 === r[1]); });
   if (S.view === "cal"){ document.getElementById("days").innerHTML = calHtml(list); return; }
+  if (S.view === "seg"){ document.getElementById("days").innerHTML = segHtml(filtered(true)); return; }
   // El filtro de fechas usa la fecha de inicio (como "Desde" en Centrality); solo aparecen los días con PT.
   const dates = [...new Set((S.d1 || S.d2 ? list : data).map(x => x.a.date))].sort();
   document.getElementById("days").innerHTML = dates.map(dt => {
@@ -343,11 +489,12 @@ document.getElementById("tipo").addEventListener("change", ev => { S.tipo = ev.t
 document.getElementById("prog").addEventListener("change", ev => { S.prog = ev.target.value; render(); });
 document.getElementById("soloFp").addEventListener("click", ev => { S.fp = !S.fp; ev.currentTarget.setAttribute("aria-pressed", S.fp); render(); });
 document.getElementById("conAdj").addEventListener("click", ev => { S.adj = !S.adj; ev.currentTarget.setAttribute("aria-pressed", S.adj); render(); });
-const vT = document.getElementById("vTabla"), vC = document.getElementById("vCal");
-function setView(v){ S.view = v; vT.setAttribute("aria-pressed", v === "tabla"); vC.setAttribute("aria-pressed", v === "cal"); try { localStorage.setItem("c2vista", v); } catch (e) {} render(); }
+const vT = document.getElementById("vTabla"), vC = document.getElementById("vCal"), vS = document.getElementById("vSeg");
+function setView(v){ S.view = v; vT.setAttribute("aria-pressed", v === "tabla"); vC.setAttribute("aria-pressed", v === "cal"); vS.setAttribute("aria-pressed", v === "seg"); try { localStorage.setItem("c2vista", v); } catch (e) {} render(); }
+vS.onclick = () => setView("seg");
 vT.onclick = () => setView("tabla");
 vC.onclick = () => setView("cal");
-try { const v = localStorage.getItem("c2vista"); if (v === "cal") { S.view = "cal"; vT.setAttribute("aria-pressed", "false"); vC.setAttribute("aria-pressed", "true"); } } catch (e) {}
+try { const v = localStorage.getItem("c2vista"); if (v === "cal" || v === "seg") { S.view = v; vT.setAttribute("aria-pressed", "false"); (v === "cal" ? vC : vS).setAttribute("aria-pressed", "true"); } } catch (e) {}
 
 const drawer = document.getElementById("drawer"); let cur = null, tab = "gen";
 function drawD(){

@@ -205,7 +205,25 @@ def comparar(prev, nuevo):
     return cambios
 
 
-def generar_html(pts, cambios, leido):
+CAMPOS_PLAN = ("ini", "fin", "estado", "ref", "desc", "zona", "area", "tipo", "prog")
+
+
+def actualizar_planes(pts):
+    """Guarda la foto del plan del mes en curso la primera vez que corre en ese mes
+    (normalmente el día 1 a primera hora) y devuelve todas las fotos guardadas."""
+    carpeta = DATOS / "planes"
+    carpeta.mkdir(parents=True, exist_ok=True)
+    ahora = datetime.now(TZ)
+    mes = ahora.strftime("%Y-%m")
+    archivo = carpeta / f"{mes}.json"
+    if not archivo.exists():
+        foto = {x["pt"]: {k: x.get(k) for k in CAMPOS_PLAN} for x in pts.values() if fecha_local(x.get("ini"))[:7] == mes}
+        archivo.write_text(json.dumps({"tomada": ahora.isoformat(timespec="minutes"), "pts": foto}, ensure_ascii=False), encoding="utf-8")
+        log(f"Foto del plan de {mes} guardada: {len(foto)} PT")
+    return {f.stem: json.loads(f.read_text(encoding="utf-8")) for f in sorted(carpeta.glob("*.json"))}
+
+
+def generar_html(pts, cambios, leido, planes=None):
     plantilla = (DIR / "plantilla.html").read_text(encoding="utf-8")
     filas = sorted(pts.values(), key=lambda d: (d.get("ini") or "", d["pt"]))
     datos = [{k: v for k, v in d.items() if k != "ficha_leida"} for d in filas]
@@ -218,6 +236,11 @@ def generar_html(pts, cambios, leido):
             resumen.setdefault(c["pt"], []).append(c["txt"])
     meta = {"hoy": datetime.now(TZ).strftime("%Y-%m-%d"), "leido": leido, "desde": DESDE, "hasta": HASTA,
             "cambios": [{"pt": k, "txt": " · ".join(v)} for k, v in resumen.items()]}
+    # Fotos del plan: por PT, [inicio planificado, estado]; los PT del plan que ya no están se mandan completos.
+    meta["planes"], meta["plan_fuera"] = {}, []
+    for mes, foto in (planes or {}).items():
+        meta["planes"][mes] = {"tomada": foto["tomada"], "pts": {pt: [v.get("ini"), v.get("estado")] for pt, v in foto["pts"].items()}}
+        meta["plan_fuera"] += [dict(v, pt=pt) for pt, v in foto["pts"].items() if pt not in pts]
     html = plantilla.replace("/*DATA*/", js).replace("/*META*/", json.dumps(meta, ensure_ascii=False).replace("</", "<\\/"))
     SITE.mkdir(exist_ok=True)
     (SITE / "index.html").write_text(html, encoding="utf-8")
@@ -399,7 +422,7 @@ def main():
         with open(DATOS / "cambios.jsonl", "a", encoding="utf-8") as f:
             for cb in cambios:
                 f.write(json.dumps(dict(cb, cuando=leido), ensure_ascii=False) + "\n")
-    html = generar_html(nuevo, cambios, leido)
+    html = generar_html(nuevo, cambios, leido, actualizar_planes(nuevo))
     log(f"Agenda generada: {html} ({html.stat().st_size // 1024} KB). Cambios: {len(cambios)}{' (primera carga)' if primera else ''}")
     # Con actualización cada hora, el correo solo sale cuando hay cambios.
     if primera or cambios:

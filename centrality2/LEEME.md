@@ -72,6 +72,15 @@ Desde ahí corre sola cada 1 hora. Si SAESA Diario está corriendo en ese moment
 - Detecta PT nuevos, cambios de estado, de fechas y de programador, y PT que salieron del rango.
 - Publica la agenda cifrada en GitHub Pages. El correo lleva el resumen de cambios y el enlace a la página, sin adjunto (los correos corporativos suelen bloquear adjuntos .html grandes).
 
+## Seguimiento mensual
+
+Vista **Seguimiento** de la agenda: grilla de lunes a domingo del mes, con una tarjeta por PT (S/E, horario, descripción, PT, área y estado de seguimiento).
+
+- El primer día de cada mes se guarda una foto del plan (`datos/planes/AAAA-MM.json`). Durante el mes se compara contra esa foto: ejecutados, reprogramados (con la fecha original tachada), cancelados, programados, en trámite y agregados durante el mes, más el % de cumplimiento de lo ya vencido.
+- Estado de seguimiento: Hecha → Ejecutado; Faena se reprograma o PT con fecha movida → Reprogramado; cancelaciones, Rechazada, Riesgo inminente, Autoridad → Cancelado; En Análisis → Programado; el resto → En trámite.
+- Los meses anteriores a noviembre de 2026 no tienen foto del plan y muestran solo el estado actual.
+- Respeta los filtros de zona, estado, tipo, programador y búsqueda. El botón "Imprimir o guardar PDF" imprime el mes completo.
+
 ## Tiempos
 
 - Primera carga (01/01 a 31/12): entre 2 y 3 horas.
