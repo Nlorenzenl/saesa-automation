@@ -244,6 +244,7 @@ a{color:var(--accent)}
     <button class="chip" data-rango="semana" aria-pressed="false">Próximos 7 días</button>
     <button class="chip" id="fQuitar" hidden>Quitar fechas</button>
   </div>
+  <button class="btn" id="xlsx" title="Descarga en Excel los PT que se ven con los filtros actuales (fechas, zona, estado, tipo, programador, búsqueda)">Descargar Excel</button>
   <div class="chips" id="zonas" role="group" aria-label="Zona"></div>
   <details class="estsel" id="estSel"><summary id="estSum">Todos los estados</summary><div class="panel" id="estPanel"></div></details>
   <details class="estsel" id="tipSel"><summary id="tipSum">Todos los tipos</summary><div class="panel" id="tipPanel" style="width:min(300px,calc(100vw - 32px))"></div></details>
@@ -675,6 +676,83 @@ document.addEventListener("change", ev => {
   }
 });
 
+// ---------- Excel (.xlsx armado en el navegador, sin librerías externas) ----------
+const XL = (() => {
+  const enc = new TextEncoder();
+  const crcT = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++){ let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+  const crc32 = b => { let c = 0xFFFFFFFF; for (let i = 0; i < b.length; i++) c = crcT[(c ^ b[i]) & 255] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; };
+  // ZIP sin compresión (método "stored"): suficiente para que Excel lo abra
+  function zip(files){
+    const partes = [], central = []; let off = 0;
+    files.forEach(([nombre, txt]) => {
+      const n = enc.encode(nombre), d = enc.encode(txt), c = crc32(d);
+      const h = new DataView(new ArrayBuffer(30));
+      h.setUint32(0, 0x04034b50, true); h.setUint16(4, 20, true); h.setUint16(6, 0x0800, true); h.setUint32(14, c, true); h.setUint32(18, d.length, true); h.setUint32(22, d.length, true); h.setUint16(26, n.length, true);
+      partes.push(new Uint8Array(h.buffer), n, d);
+      const e = new DataView(new ArrayBuffer(46));
+      e.setUint32(0, 0x02014b50, true); e.setUint16(4, 20, true); e.setUint16(6, 20, true); e.setUint16(8, 0x0800, true); e.setUint32(16, c, true); e.setUint32(20, d.length, true); e.setUint32(24, d.length, true); e.setUint16(28, n.length, true); e.setUint32(42, off, true);
+      central.push(new Uint8Array(e.buffer), n);
+      off += 30 + n.length + d.length;
+    });
+    const tam = central.reduce((s, b) => s + b.length, 0), f = new DataView(new ArrayBuffer(22));
+    f.setUint32(0, 0x06054b50, true); f.setUint16(8, files.length, true); f.setUint16(10, files.length, true); f.setUint32(12, tam, true); f.setUint32(16, off, true);
+    return new Blob([...partes, ...central, new Uint8Array(f.buffer)], {type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
+  }
+  const xe = v => String(v).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  const col = i => { let s = ""; i++; while (i){ const m = (i - 1) % 26; s = String.fromCharCode(65 + m) + s; i = (i - m - 1) / 26; } return s; };
+  // Valor de celda: {f: Date-serial} para fecha, número, o texto
+  function hoja(cols, filas){
+    const anchos = cols.map(c => `<col min="${c.i + 1}" max="${c.i + 1}" width="${c.w || 14}" customWidth="1"/>`).join("");
+    let x = `<row r="1">${cols.map(c => `<c r="${col(c.i)}1" t="inlineStr" s="1"><is><t>${xe(c.t)}</t></is></c>`).join("")}</row>`;
+    filas.forEach((f, r) => {
+      x += `<row r="${r + 2}">` + f.map((v, i) => {
+        const ref = col(i) + (r + 2);
+        if (v == null || v === "") return "";
+        if (typeof v === "object" && "fecha" in v) return `<c r="${ref}" s="2"><v>${v.fecha}</v></c>`;
+        if (typeof v === "number") return `<c r="${ref}"><v>${v}</v></c>`;
+        return `<c r="${ref}" t="inlineStr" s="3"><is><t xml:space="preserve">${xe(v)}</t></is></c>`;
+      }).join("") + "</row>";
+    });
+    const ult = col(cols.length - 1) + (filas.length + 1);
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><cols>${anchos}</cols><sheetData>${x}</sheetData><autoFilter ref="A1:${ult}"/></worksheet>`;
+  }
+  function libro(hojas){
+    const W = "http://schemas.openxmlformats.org/", R = W + "officeDocument/2006/relationships";
+    const files = [
+      ["[Content_Types].xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="${W}package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>${hojas.map((h, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join("")}</Types>`],
+      ["_rels/.rels", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="${W}package/2006/relationships"><Relationship Id="rId1" Type="${R}/officeDocument" Target="xl/workbook.xml"/></Relationships>`],
+      ["xl/workbook.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="${W}spreadsheetml/2006/main" xmlns:r="${R}"><sheets>${hojas.map((h, i) => `<sheet name="${xe(h.nombre)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join("")}</sheets><definedNames>${hojas.map((h, i) => `<definedName name="_xlnm._FilterDatabase" localSheetId="${i}" hidden="1">'${xe(h.nombre)}'!$A$1:$${col(h.cols.length - 1)}$${h.filas.length + 1}</definedName>`).join("")}</definedNames></workbook>`],
+      ["xl/_rels/workbook.xml.rels", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="${W}package/2006/relationships">${hojas.map((h, i) => `<Relationship Id="rId${i + 1}" Type="${R}/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join("")}<Relationship Id="rId${hojas.length + 1}" Type="${R}/styles" Target="styles.xml"/></Relationships>`],
+      ["xl/styles.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="${W}spreadsheetml/2006/main"><numFmts count="1"><numFmt numFmtId="164" formatCode="dd/mm/yyyy hh:mm"/></numFmts><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF2F3E4F"/></patternFill></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="4"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf><xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="top"/></xf></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`],
+    ];
+    hojas.forEach((h, i) => files.push([`xl/worksheets/sheet${i + 1}.xml`, hoja(h.cols.map((c, j) => Object.assign({i: j}, c)), h.filas)]));
+    return zip(files);
+  }
+  return {libro};
+})();
+// Fecha ISO → número de fecha de Excel en hora de Chile
+const xlFecha = iso => { if (!iso) return ""; const f = fmt(iso); const [y, m, d] = f.date.split("-").map(Number), [h, mi] = f.hm.split(":").map(Number); return {fecha: +((Date.UTC(y, m - 1, d, h, mi) - Date.UTC(1899, 11, 30)) / 86400000).toFixed(10)}; };
+function descargarExcel(){
+  const lista = filtered(false).slice().sort((p, q) => String(p.ini).localeCompare(String(q.ini)) || p.pt.localeCompare(q.pt));
+  if (!lista.length){ aviso("No hay PT con los filtros actuales"); return; }
+  const num = v => /^\d+$/.test(String(v)) ? +v : v;
+  const hojas = [
+    {nombre: "PT", cols: [{t: "PT", w: 10}, {t: "Estado Centrality", w: 30}, {t: "Etapa", w: 22}, {t: "Inicio", w: 16}, {t: "Término", w: 16}, {t: "Tipo de PT", w: 30}, {t: "Tipo (grupo)", w: 16}, {t: "Zona", w: 24}, {t: "Área", w: 26}, {t: "Subestación", w: 18}, {t: "Elemento de referencia", w: 36}, {t: "Descripción del trabajo", w: 60}, {t: "Programador", w: 26}, {t: "Solicitante", w: 26}, {t: "Creador", w: 26}, {t: "Caso", w: 10}, {t: "Fuera de plazo", w: 9}, {t: "N° condiciones", w: 9}, {t: "N° adjuntos", w: 9}, {t: "Última aprobación", w: 16}, {t: "Último paso de aprobación", w: 30}, {t: "Última acción", w: 16}, {t: "Usuario", w: 26}],
+      filas: lista.map(x => { const ap = (x.apr || [])[0] || []; return [num(x.pt), x.estado, ET[x.e] || x.e, xlFecha(x.ini), xlFecha(x.fin || x.ini), x.tipo, x.tipoC, x.zona, x.area, x.se, x.ref, x.desc, x.prog || "Sin asignar", x.solicitante, x.creador, num(x.caso || ""), x.fp ? "Sí" : "No", x.cond.length, x.adj.length, xlFecha(ap[0]), ap[1], ap[3], ap[2]]; })},
+    {nombre: "Condiciones y bloqueos", cols: [{t: "PT", w: 10}, {t: "Inicio PT", w: 16}, {t: "Subestación", w: 18}, {t: "N°", w: 6}, {t: "Zona intervención", w: 30}, {t: "Elementos de referencia", w: 40}, {t: "Condición", w: 28}, {t: "Descripción", w: 50}, {t: "Obligatoria", w: 10}],
+      filas: lista.flatMap(x => x.cond.map(c => [num(x.pt), xlFecha(x.ini), x.se, c[0] == null ? "" : num(c[0]), c[1], c[2], c[3], c[4], c[5] ? "Sí" : "No"]))},
+    {nombre: "Aprobaciones", cols: [{t: "PT", w: 10}, {t: "Fecha", w: 16}, {t: "Paso", w: 34}, {t: "Usuario", w: 28}, {t: "Acción", w: 18}, {t: "Comentarios", w: 60}],
+      filas: lista.flatMap(x => (x.apr || []).map(a => [num(x.pt), xlFecha(a[0]), a[1], a[2], a[3], a[4]]))},
+    {nombre: "Adjuntos", cols: [{t: "PT", w: 10}, {t: "Nombre", w: 40}, {t: "Tamaño", w: 10}, {t: "Tipo", w: 18}, {t: "Creado", w: 16}, {t: "Creador", w: 26}, {t: "Enlace (requiere sesión en Centrality)", w: 60}],
+      filas: lista.flatMap(x => x.adj.map(a => [num(x.pt), a[1], a[2], a[3], xlFecha(a[5]), a[6], `${BASE_URL}fh_get_file.php?id=${a[0]}&download=1`]))},
+  ];
+  const hoy = new Date().toISOString().slice(0, 10);
+  const nombre = `centrality2_${S.d1 || "inicio"}_a_${S.d2 || "fin"}_${hoy}.xlsx`.replace(/[^\w.-]/g, "");
+  const url = URL.createObjectURL(XL.libro(hojas)), a = document.createElement("a");
+  a.href = url; a.download = nombre; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 5000);
+  aviso(`Excel descargado: ${lista.length} PT`);
+}
+
 function render(){
   document.getElementById("alerts").innerHTML = ALERTS.map(a => `<button class="al ${a.cls}" data-al="${a.id}" aria-pressed="${S.al === a.id}"><b>${a.t}</b><span>${S.al === a.id ? "Filtrando · clic para quitar" : "Clic para filtrar"}</span><em>${data.filter(a.f).length}</em></button>`).join("");
   const list = filtered(); document.getElementById("count").textContent = `${list.length} de ${data.length} PT`;
@@ -728,6 +806,7 @@ document.addEventListener("click", ev => {
   if (dl){ S.d1 = S.d2 = dl.dataset.dia; setView("tabla"); window.scrollTo({top: 0}); }
   else if (rg){ [S.d1, S.d2] = rango(rg.dataset.rango); render(); }
   else if (t.closest("#fQuitar")){ S.d1 = S.d2 = ""; render(); }
+  else if (t.closest("#xlsx")) descargarExcel();
   else if (z){ const v = z.dataset.z; S.z.has(v) ? S.z.delete(v) : S.z.add(v); z.setAttribute("aria-pressed", S.z.has(v)); render(); }
   else if (al){ S.al = S.al === al.dataset.al ? "" : al.dataset.al; render(); }
   else if (mo){ S.shown[mo.dataset.more] = (S.shown[mo.dataset.more] || 80) + 80; render(); }
