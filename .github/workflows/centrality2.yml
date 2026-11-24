@@ -1,9 +1,10 @@
 name: Centrality 2.0
 on:
   schedule:
-    # Cada 1 hora. Si "SAESA Diario" (que usa el mismo usuario de Centrality) está
-    # corriendo, el trabajo "revisar" se salta esa hora.
-    - cron: "0 * * * *"
+    # Cada 1 hora, en el minuto 23: GitHub descarta muchas ejecuciones programadas en el
+    # minuto 0 por alta demanda. Si "SAESA Diario" (que usa el mismo usuario de Centrality)
+    # está corriendo, el trabajo "revisar" se salta esa hora.
+    - cron: "23 * * * *"
   workflow_dispatch:
     inputs:
       full_refresh:
