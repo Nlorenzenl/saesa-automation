@@ -86,6 +86,25 @@ main .inner{display:grid;gap:14px;padding-block:4px 60px}
 .pill i{width:7px;height:7px;border-radius:50%;background:var(--e);flex:none}
 .c-est .pill,#dPills .pill{white-space:normal;align-items:baseline;line-height:1.3;padding:2px 8px}
 .estsel{position:relative}
+/* Actualizar ahora */
+.actbtn{display:inline-flex;align-items:center;gap:6px}
+.actbtn svg{width:14px;height:14px}
+.actbtn.girando svg{animation:gira 1.2s linear infinite}
+@keyframes gira{to{transform:rotate(360deg)}}
+dialog.actdlg{border:1px solid var(--line);border-radius:12px;background:var(--surface);color:var(--ink);padding:20px 22px;width:min(460px,calc(100vw - 32px));font-size:14px}
+dialog.actdlg::backdrop{background:rgb(0 0 0 / .35)}
+.actdlg h2{margin:0 0 10px;font-size:17px}
+.actdlg p{margin:0 0 10px;line-height:1.45}
+.actest{border:1px solid var(--line);border-left:3px solid var(--muted);border-radius:6px;padding:8px 10px;margin:0 0 14px}
+.actest.ok{border-left-color:var(--ok)} .actest.run{border-left-color:var(--accent)} .actest.err{border-left-color:var(--crit)}
+.actacc{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 14px}
+.actacc a.btn{text-decoration:none;color:inherit;display:inline-flex;align-items:center}
+.btn.pri{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.actdlg details{border-top:1px solid var(--line);padding-top:10px;font-size:13px}
+.actdlg summary{cursor:pointer;font-weight:600}
+.actdlg ol{margin:8px 0;padding-left:20px;line-height:1.5}
+.actdlg input[type=password]{width:100%;border:1px solid var(--line);background:var(--bg);color:var(--ink);border-radius:6px;padding:7px 9px;font:13px var(--f-body);margin:4px 0 8px}
+.actdlg .muted{color:var(--muted);font-size:12px}
 /* Aviso flotante */
 .toast{position:fixed;left:50%;bottom:20px;transform:translate(-50%,20px);opacity:0;pointer-events:none;background:var(--ink);color:var(--surface);padding:10px 16px;border-radius:8px;font-size:13px;z-index:60;transition:opacity .2s,transform .2s;max-width:calc(100vw - 32px)}
 .toast.on{opacity:1;transform:translate(-50%,0)}
@@ -231,8 +250,33 @@ a{color:var(--accent)}
 <header class="top g"><div class="inner">
   <div class="logo"><b>Centrality 2.0</b><span>Permisos de trabajo · Transmisión</span></div>
   <div class="sync"><i aria-hidden="true"></i><span id="syncTxt"></span></div>
+  <button class="btn actbtn" id="actBtn" title="Leer Centrality de nuevo ahora"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>Actualizar</button>
   <input class="search" id="q" type="search" placeholder="Buscar PT, subestación, componente o descripción" aria-label="Buscar">
 </div></header>
+
+<dialog class="actdlg" id="actDlg" aria-labelledby="actTit">
+  <h2 id="actTit">Actualizar desde Centrality</h2>
+  <div class="actest" id="actEstado" role="status">Consultando GitHub…</div>
+  <div class="actacc">
+    <button class="btn pri" id="actEjecutar" hidden>Actualizar ahora</button>
+    <a class="btn" id="actAbrir" target="_blank" rel="noopener">Abrir GitHub para actualizar</a>
+    <button class="btn pri" id="actRecargar" hidden>Recargar la página</button>
+    <button class="btn" id="actCerrar">Cerrar</button>
+  </div>
+  <p class="muted">La agenda intenta actualizarse sola cada 1 hora, pero GitHub a veces atrasa o salta esas ejecuciones; con este botón no dependes de eso. Una actualización tarda unos 20 minutos; si ya hay una en curso, la nueva espera su turno. Si SAESA Diario está usando Centrality en ese momento, la actualización se salta.</p>
+  <details id="actTokNo"><summary>Actualizar con un solo clic desde esta página</summary>
+    <p>Sin token, el botón abre GitHub y ahí presionas <b>Run workflow</b>. Con un token, la página lo ejecuta directo. El token queda guardado solo en este navegador.</p>
+    <ol>
+      <li>En GitHub: foto de perfil → <b>Settings</b> → <b>Developer settings</b> → <b>Personal access tokens</b> → <b>Fine-grained tokens</b> → <b>Generate new token</b>.</li>
+      <li><b>Repository access</b>: Only select repositories → este repositorio.</li>
+      <li><b>Permissions</b> → <b>Actions</b>: Read and write. Nada más.</li>
+      <li>Genera el token, cópialo y pégalo aquí:</li>
+    </ol>
+    <input type="password" id="actTok" autocomplete="off" placeholder="github_pat_…" aria-label="Token de GitHub">
+    <button class="btn" id="actGuardar">Guardar en este navegador</button>
+  </details>
+  <p id="actTokSi" class="muted" hidden>Este navegador tiene un token guardado para actualizar directo. <button class="chip" id="actOlvidar">Borrar token</button></p>
+</dialog>
 
 <div class="toolbar g"><div class="inner">
   <div class="seg" role="group" aria-label="Vista"><button id="vTabla" aria-pressed="true">Tabla</button><button id="vCal" aria-pressed="false">Calendario</button><button id="vSeg" aria-pressed="false">Seguimiento</button><button id="vFact" aria-pressed="false">Factibilidad</button></div>
@@ -752,6 +796,74 @@ function descargarExcel(){
   a.href = url; a.download = nombre; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 5000);
   aviso(`Excel descargado: ${lista.length} PT`);
 }
+
+// ---------- Actualizar ahora (GitHub Actions) ----------
+// Sin token: muestra el estado de la última ejecución (repositorio público) y abre GitHub para ejecutar.
+// Con token guardado en este navegador: ejecuta el workflow directo y sigue su avance.
+const GH = (() => {
+  const m = location.hostname.match(/^([\w-]+)\.github\.io$/), seg = location.pathname.split("/").filter(Boolean)[0];
+  const repo = m && seg ? `${m[1]}/${seg}` : "Nlorenzenl/saesa-automation";
+  return {repo, wf: "centrality2.yml", web: `https://github.com/${repo}/actions/workflows/centrality2.yml`, api: `https://api.github.com/repos/${repo}/actions`};
+})();
+const LS_TOK = "c2-gh-token";
+const tok = {get(){ try { return localStorage.getItem(LS_TOK) || ""; } catch (e) { return ""; } },
+  set(v){ try { v ? localStorage.setItem(LS_TOK, v) : localStorage.removeItem(LS_TOK); } catch (e) {} }};
+const ghFetch = (ruta, op = {}) => { const h = {"Accept": "application/vnd.github+json"}; const t = tok.get(); if (t) h.Authorization = "Bearer " + t; return fetch(GH.api + ruta, Object.assign({headers: h, cache: "no-store"}, op, {headers: Object.assign(h, op.headers || {})})); };
+const hace = iso => { const min = Math.round((Date.now() - new Date(iso)) / 60000); return min < 1 ? "recién" : min < 60 ? `hace ${min} min` : min < 1440 ? `hace ${Math.floor(min / 60)} h ${min % 60} min` : `hace ${Math.floor(min / 1440)} d`; };
+let actPoll = null, actDesde = 0;
+function estadoRun(r){
+  if (!r) return {cls: "", txt: "Sin ejecuciones registradas"};
+  const origen = r.event === "schedule" ? "automática" : "manual";
+  if (r.status !== "completed") return {cls: "run", txt: `Actualización ${origen} en curso, iniciada ${hace(r.run_started_at || r.created_at)}. Tarda unos 20 minutos.`, run: true};
+  if (r.conclusion === "success") return {cls: "ok", txt: `Última actualización ${origen} terminada ${hace(r.updated_at)}.`};
+  if (r.conclusion === "skipped") return {cls: "", txt: `La última ejecución se saltó (SAESA Diario estaba usando Centrality) ${hace(r.updated_at)}.`};
+  return {cls: "err", txt: `La última ejecución terminó con error (${r.conclusion}) ${hace(r.updated_at)}.`};
+}
+async function revisarAct(){
+  const box = document.getElementById("actEstado");
+  try {
+    const r = await ghFetch(`/workflows/${GH.wf}/runs?per_page=5`);
+    if (r.status === 401){ tok.set(""); pintarAct(); box.className = "actest err"; box.textContent = "El token guardado no es válido o venció. Se borró de este navegador."; return; }
+    if (!r.ok) throw new Error(r.status);
+    const runs = (await r.json()).workflow_runs || [];
+    const mio = actDesde ? runs.find(x => x.event === "workflow_dispatch" && new Date(x.created_at) >= actDesde - 60000) : null;
+    const e = estadoRun(mio || runs[0]);
+    box.className = "actest " + e.cls; box.textContent = e.txt;
+    document.getElementById("actRecargar").hidden = !(mio && mio.status === "completed" && mio.conclusion === "success");
+    document.getElementById("actBtn").classList.toggle("girando", !!e.run);
+    clearTimeout(actPoll);
+    if (e.run || (actDesde && !mio)) actPoll = setTimeout(revisarAct, tok.get() ? 30000 : 90000);
+  } catch (err) {
+    box.className = "actest"; box.textContent = "No se pudo consultar GitHub (sin conexión o límite de consultas). Puedes revisar el avance en GitHub.";
+  }
+}
+async function ejecutarAct(){
+  const b = document.getElementById("actEjecutar"); b.disabled = true; b.textContent = "Enviando…";
+  try {
+    const r = await ghFetch(`/workflows/${GH.wf}/dispatches`, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ref: "main"})});
+    if (r.status === 204){ actDesde = Date.now(); aviso("Actualización solicitada. Tarda unos 20 minutos."); const box = document.getElementById("actEstado"); box.className = "actest run"; box.textContent = "Actualización solicitada. GitHub la inicia en unos segundos…"; setTimeout(revisarAct, 8000); }
+    else if (r.status === 401 || r.status === 403 || r.status === 404){ aviso("GitHub rechazó el token: revisa que tenga permiso Actions (lectura y escritura) en este repositorio"); }
+    else aviso("GitHub respondió " + r.status);
+  } catch (e) { aviso("No se pudo conectar con GitHub"); }
+  b.disabled = false; b.textContent = "Actualizar ahora";
+}
+function pintarAct(){
+  const hay = !!tok.get();
+  document.getElementById("actEjecutar").hidden = !hay;
+  document.getElementById("actAbrir").textContent = hay ? "Ver en GitHub" : "Abrir GitHub para actualizar";
+  document.getElementById("actTokSi").hidden = !hay;
+  document.getElementById("actTokNo").hidden = hay;
+}
+document.getElementById("actBtn").addEventListener("click", () => { pintarAct(); document.getElementById("actDlg").showModal(); revisarAct(); });
+document.getElementById("actCerrar").addEventListener("click", () => document.getElementById("actDlg").close());
+document.getElementById("actDlg").addEventListener("click", ev => { if (ev.target.id === "actDlg") ev.target.close(); });
+document.getElementById("actEjecutar").addEventListener("click", ejecutarAct);
+document.getElementById("actAbrir").href = GH.web;
+document.getElementById("actRecargar").addEventListener("click", () => location.reload());
+document.getElementById("actGuardar").addEventListener("click", () => { const i = document.getElementById("actTok"), v = i.value.trim(); if (!/^(github_pat_|ghp_)\w+$/.test(v)){ aviso("Eso no parece un token de GitHub"); return; } tok.set(v); i.value = ""; pintarAct(); aviso("Token guardado en este navegador"); revisarAct(); });
+document.getElementById("actOlvidar").addEventListener("click", () => { tok.set(""); pintarAct(); aviso("Token borrado de este navegador"); });
+// Estado al cargar la página: el ícono gira si hay una actualización en curso
+setTimeout(revisarAct, 1500);
 
 function render(){
   document.getElementById("alerts").innerHTML = ALERTS.map(a => `<button class="al ${a.cls}" data-al="${a.id}" aria-pressed="${S.al === a.id}"><b>${a.t}</b><span>${S.al === a.id ? "Filtrando · clic para quitar" : "Clic para filtrar"}</span><em>${data.filter(a.f).length}</em></button>`).join("");
