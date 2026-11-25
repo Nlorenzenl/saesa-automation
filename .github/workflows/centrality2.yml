@@ -1,9 +1,10 @@
 name: Centrality 2.0
 on:
   schedule:
-    # Cada 1 hora, en el minuto 23: GitHub descarta muchas ejecuciones programadas en el
-    # minuto 0 por alta demanda. Si "SAESA Diario" (que usa el mismo usuario de Centrality)
-    # está corriendo, el trabajo "revisar" se salta esa hora.
+    # Respaldo: cada ejecución deja programada la siguiente (trabajo "programar"), porque
+    # GitHub descarta muchas ejecuciones programadas. Este horario solo reinicia la cadena
+    # si se corta. Si "SAESA Diario" (que usa el mismo usuario de Centrality) está
+    # corriendo, el trabajo "revisar" se salta esa hora.
     - cron: "23 * * * *"
   workflow_dispatch:
     inputs:
@@ -19,9 +20,13 @@ on:
         description: "Solo enviar 3 correos de prueba (no lee Centrality ni publica)"
         type: boolean
         default: false
+      automatica:
+        description: "Uso interno: ejecución encadenada cada 1 hora (no marcar)"
+        type: boolean
+        default: false
 
 permissions:
-  actions: read
+  actions: write
   contents: write
   pages: write
   id-token: write
@@ -41,8 +46,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Solo las ejecuciones automáticas se saltan; las manuales corren siempre.
-          if [ "${{ github.event_name }}" != "schedule" ]; then echo "omitir=false" >> "$GITHUB_OUTPUT"; exit 0; fi
+          # Solo las ejecuciones automáticas (horario o cadena) se saltan; las manuales corren siempre.
+          if [ "${{ github.event_name }}" != "schedule" ] && [ "${{ inputs.automatica }}" != "true" ]; then echo "omitir=false" >> "$GITHUB_OUTPUT"; exit 0; fi
           n=0
           for estado in in_progress queued waiting pending requested; do
             c=$(gh run list -R "${{ github.repository }}" --workflow saesa_diario.yml --status "$estado" --json databaseId --jq length || echo 0)
@@ -149,3 +154,31 @@ jobs:
       - name: Publicar en GitHub Pages
         id: deploy
         uses: actions/deploy-pages@v4
+
+  # Deja programada la siguiente ejecución una hora después del inicio de esta.
+  # Corre aunque se haya saltado o fallado la sincronización, para que la cadena no se corte.
+  # Si ya hay otra ejecución esperando (manual o del horario), no agrega otra.
+  programar:
+    needs: [revisar, sincronizar, publicar]
+    if: ${{ always() && !inputs.prueba_correo }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - name: Esperar y lanzar la siguiente actualización
+        env:
+          GH_TOKEN: ${{ github.token }}
+          R: ${{ github.repository }}
+        run: |
+          inicio=$(gh api "repos/$R/actions/runs/${{ github.run_id }}" --jq .run_started_at)
+          espera=$(( 3600 - ( $(date +%s) - $(date -d "$inicio" +%s) ) ))
+          if [ "$espera" -gt 0 ]; then
+            echo "Siguiente actualización en $((espera / 60)) min"
+            sleep "$espera"
+          fi
+          otras=$(gh run list -R "$R" --workflow centrality2.yml --limit 20 --json databaseId,status             --jq '[.[] | select(.databaseId != ${{ github.run_id }} and .status != "completed")] | length')
+          if [ "$otras" -gt 0 ]; then
+            echo "Ya hay otra ejecución esperando; no se agrega otra."
+          else
+            gh workflow run centrality2.yml -R "$R" --ref "${{ github.ref_name }}" -f automatica=true
+            echo "Siguiente actualización lanzada"
+          fi
