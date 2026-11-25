@@ -263,7 +263,7 @@ a{color:var(--accent)}
     <button class="btn pri" id="actRecargar" hidden>Recargar la página</button>
     <button class="btn" id="actCerrar">Cerrar</button>
   </div>
-  <p class="muted">La agenda intenta actualizarse sola cada 1 hora, pero GitHub a veces atrasa o salta esas ejecuciones; con este botón no dependes de eso. Una actualización tarda unos 20 minutos; si ya hay una en curso, la nueva espera su turno. Si SAESA Diario está usando Centrality en ese momento, la actualización se salta.</p>
+  <p class="muted">La agenda se actualiza sola cada 1 hora: cada actualización deja programada la siguiente. Usa este botón si necesitas datos antes. Una actualización tarda unos 20 minutos; si ya hay una en curso, la nueva espera su turno. Si SAESA Diario está usando Centrality en ese momento, la actualización se salta.</p>
   <details id="actTokNo"><summary>Actualizar con un solo clic desde esta página</summary>
     <p>Sin token, el botón abre GitHub y ahí presionas <b>Run workflow</b>. Con un token, la página lo ejecuta directo. El token queda guardado solo en este navegador.</p>
     <ol>
@@ -811,13 +811,25 @@ const tok = {get(){ try { return localStorage.getItem(LS_TOK) || ""; } catch (e)
 const ghFetch = (ruta, op = {}) => { const h = {"Accept": "application/vnd.github+json"}; const t = tok.get(); if (t) h.Authorization = "Bearer " + t; return fetch(GH.api + ruta, Object.assign({headers: h, cache: "no-store"}, op, {headers: Object.assign(h, op.headers || {})})); };
 const hace = iso => { const min = Math.round((Date.now() - new Date(iso)) / 60000); return min < 1 ? "recién" : min < 60 ? `hace ${min} min` : min < 1440 ? `hace ${Math.floor(min / 60)} h ${min % 60} min` : `hace ${Math.floor(min / 1440)} d`; };
 let actPoll = null, actDesde = 0;
-function estadoRun(r){
-  if (!r) return {cls: "", txt: "Sin ejecuciones registradas"};
-  const origen = r.event === "schedule" ? "automática" : "manual";
-  if (r.status !== "completed") return {cls: "run", txt: `Actualización ${origen} en curso, iniciada ${hace(r.run_started_at || r.created_at)}. Tarda unos 20 minutos.`, run: true};
-  if (r.conclusion === "success") return {cls: "ok", txt: `Última actualización ${origen} terminada ${hace(r.updated_at)}.`};
-  if (r.conclusion === "skipped") return {cls: "", txt: `La última ejecución se saltó (SAESA Diario estaba usando Centrality) ${hace(r.updated_at)}.`};
-  return {cls: "err", txt: `La última ejecución terminó con error (${r.conclusion}) ${hace(r.updated_at)}.`};
+const hora = iso => new Intl.DateTimeFormat("es-CL", {timeZone: "America/Santiago", hour: "2-digit", minute: "2-digit", hour12: false}).format(new Date(iso));
+// Estado según las etapas (jobs) de la ejecución: "revisar" → "sincronizar" → "publicar" → "programar" (espera y lanza la siguiente)
+function estadoRun(r, jobs){
+  const datos = ` Los datos de esta página son del ${META.leido}.`;
+  if (!r) return {cls: "", txt: "Sin ejecuciones registradas." + datos};
+  const j = {}; (jobs || []).forEach(x => j[x.name] = x);
+  const sinc = j.sincronizar, pub = j.publicar, rev = j.revisar, prox = j.programar;
+  const siguiente = prox && prox.status !== "completed" ? ` Próxima actualización automática cerca de las ${hora(new Date(new Date(r.run_started_at || r.created_at).getTime() + 3600000))}.` : "";
+  if (r.status === "queued" || r.status === "pending" || r.status === "waiting") return {cls: "run", txt: "Hay una actualización en cola; empieza cuando termine la anterior." + datos, run: true};
+  if ((rev && rev.status !== "completed") || (sinc && sinc.status !== "completed") || (pub && pub.status !== "completed" && sinc && sinc.conclusion === "success"))
+    return {cls: "run", txt: `Actualización en curso, iniciada ${hace(r.run_started_at || r.created_at)}. Tarda unos 20 minutos.` + datos, run: true};
+  if (!jobs) return estadoSimple(r);
+  if (sinc && sinc.conclusion === "skipped") return {cls: "", txt: `La última actualización (${hora(r.created_at)}) se saltó porque SAESA Diario estaba usando Centrality.` + siguiente + datos};
+  if (sinc && sinc.conclusion === "success" && (!pub || pub.conclusion === "success")) return {cls: "ok", txt: `Última actualización terminada ${hace((pub || sinc).completed_at)}.` + siguiente + datos};
+  return {cls: "err", txt: `La última actualización (${hora(r.created_at)}) terminó con error.` + siguiente + " Puedes revisar el detalle en GitHub." + datos};
+}
+function estadoSimple(r){
+  if (r.status !== "completed") return {cls: "run", txt: `Hay una ejecución en curso, iniciada ${hace(r.run_started_at || r.created_at)}.`, run: true};
+  return {cls: r.conclusion === "success" ? "" : "err", txt: `Última ejecución terminada ${hace(r.updated_at)}. Los datos de esta página son del ${META.leido}.`};
 }
 async function revisarAct(){
   const box = document.getElementById("actEstado");
@@ -825,11 +837,15 @@ async function revisarAct(){
     const r = await ghFetch(`/workflows/${GH.wf}/runs?per_page=5`);
     if (r.status === 401){ tok.set(""); pintarAct(); box.className = "actest err"; box.textContent = "El token guardado no es válido o venció. Se borró de este navegador."; return; }
     if (!r.ok) throw new Error(r.status);
-    const runs = (await r.json()).workflow_runs || [];
+    const runs = ((await r.json()).workflow_runs || []).filter(x => !(x.status === "completed" && x.conclusion === "cancelled"));
     const mio = actDesde ? runs.find(x => x.event === "workflow_dispatch" && new Date(x.created_at) >= actDesde - 60000) : null;
-    const e = estadoRun(mio || runs[0]);
+    const run = mio || runs[0];
+    let jobs = null;
+    if (run){ try { const rj = await ghFetch(`/runs/${run.id}/jobs`); if (rj.ok) jobs = (await rj.json()).jobs; } catch (e) {} }
+    const e = estadoRun(run, jobs);
     box.className = "actest " + e.cls; box.textContent = e.txt;
-    document.getElementById("actRecargar").hidden = !(mio && mio.status === "completed" && mio.conclusion === "success");
+    const lista = jobs && jobs.some(x => x.name === "publicar" && x.conclusion === "success");
+    document.getElementById("actRecargar").hidden = !(mio && lista);
     document.getElementById("actBtn").classList.toggle("girando", !!e.run);
     clearTimeout(actPoll);
     if (e.run || (actDesde && !mio)) actPoll = setTimeout(revisarAct, tok.get() ? 30000 : 90000);
